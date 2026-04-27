@@ -1,14 +1,18 @@
 {
   "name": "math-popup",
-  "version": "0.1.0",
+  "version": "1.0.0",
   "private": true,
   "description": "Tray-resident notepad for quick math, variables, line refs, percentages and markdown.",
+  "author": "Zalman Levy",
   "main": "dist/main/main.js",
   "scripts": {
     "build": "node build/build.mjs",
     "build:watch": "node build/build.mjs --watch",
     "start": "electron .",
-    "dev": "node build/dev.mjs"
+    "dev": "node build/dev.mjs",
+    "dist": "npm run build && electron-builder",
+    "dist:portable": "npm run build && electron-builder --win portable",
+    "dist:installer": "npm run build && electron-builder --win nsis"
   },
   "dependencies": {
     "mathjs": "^12.4.2"
@@ -16,7 +20,46 @@
   "devDependencies": {
     "@types/node": "^20.11.0",
     "electron": "^30.0.0",
+    "electron-builder": "^24.13.3",
     "esbuild": "^0.20.2",
     "typescript": "^5.4.5"
+  },
+  "build": {
+    "appId": "com.zalmanlevy.mathpopup",
+    "productName": "Math Popup",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "dist/**/*",
+      "package.json"
+    ],
+    "win": {
+      "icon": "assets/icon.png",
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        },
+        {
+          "target": "portable",
+          "arch": [
+            "x64"
+          ]
+        }
+      ]
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "Math Popup"
+    },
+    "portable": {
+      "artifactName": "MathPopup-${version}-portable.exe"
+    }
   }
 }

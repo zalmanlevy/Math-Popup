@@ -177,7 +177,10 @@ app.on('window-all-closed', (e: Electron.Event) => {
 
 app.on('before-quit', () => {
   flushSettings();
-  globalShortcut.unregisterAll();
+  // Guard: when a second instance loses the single-instance lock it calls
+  // app.quit() before whenReady fires, and globalShortcut throws if used
+  // before the app is ready.
+  if (app.isReady()) globalShortcut.unregisterAll();
 });
 
 // Single-instance lock so a second launch focuses the existing popup.

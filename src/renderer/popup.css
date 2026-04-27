@@ -142,6 +142,7 @@ body {
   display: flex;
   min-height: 0;
   background: var(--bg);
+  overflow: hidden;
 }
 
 /* In text-mode: hide the result column entirely. Line numbers stay (useful
@@ -180,8 +181,6 @@ body.text-mode .result-gutter { display: none; }
   align-items: flex-start;
   justify-content: flex-end;
   white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
 }
 .result-gutter .row {
   display: flex;
@@ -235,6 +234,13 @@ body.text-mode .result-gutter { display: none; }
   color: var(--text);
   background: transparent;
   z-index: 1;
+}
+
+.ov-line {
+  display: block;
+  white-space: pre-wrap;
+  word-break: break-word;
+  overflow-wrap: break-word;
 }
 
 .editor {

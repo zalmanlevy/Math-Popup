@@ -69,6 +69,35 @@ function applyMode(mode: Mode) {
 function onInput() {
   scheduleSave();
   render();
+  ensureCaretLineVisible();
+}
+
+// Browsers only auto-scroll a textarea enough to make the caret pixel visible,
+// not the whole line. That leaves the bottom of the cursor's line (and its
+// gutter row) clipped when typing near the bottom of the editor. Scroll the
+// editor so the entire line containing the caret is in view.
+function ensureCaretLineVisible() {
+  if (editor.selectionStart !== editor.selectionEnd) return;
+  const caret = editor.selectionStart;
+  const text = editor.value;
+  const lineIndex = (text.slice(0, caret).match(/\n/g) || []).length;
+
+  const editorStyle = getComputedStyle(editor);
+  const padTop = parseFloat(editorStyle.paddingTop) || 0;
+  const lineHeight = parseFloat(editorStyle.lineHeight) || 22;
+
+  // Approximate line position (no wrap). Sufficient for short note lines.
+  const lineTop = padTop + lineIndex * lineHeight;
+  const lineBot = lineTop + lineHeight;
+
+  const viewTop = editor.scrollTop;
+  const viewBot = viewTop + editor.clientHeight;
+
+  if (lineBot > viewBot) {
+    editor.scrollTop = lineBot - editor.clientHeight;
+  } else if (lineTop < viewTop) {
+    editor.scrollTop = lineTop;
+  }
 }
 
 function scheduleSave() {
@@ -279,38 +308,27 @@ function syncScroll() {
   overlay.scrollTop = editor.scrollTop;
   overlay.scrollLeft = editor.scrollLeft;
   // Keep gutters in vertical sync with the editor's scroll.
-  lineGutter.style.transform = `translateY(${-editor.scrollTop}px)`;
-  resultGutter.style.transform = `translateY(${-editor.scrollTop}px)`;
+  lineGutter.scrollTop = editor.scrollTop;
+  resultGutter.scrollTop = editor.scrollTop;
 }
 
 function layoutGutters() {
   const lines = editor.value.split('\n');
-  // Keep the measure div the same content-width as the editor's text area so
-  // that wrapping behaves identically.
+  // (heights are read from the overlay's rendered children below)
   const editorStyle = getComputedStyle(editor);
-  measure.style.width = editor.clientWidth + 'px';
-  measure.style.font = editorStyle.font;
-  measure.style.lineHeight = editorStyle.lineHeight;
-  measure.style.padding = editorStyle.padding;
-  measure.style.boxSizing = editorStyle.boxSizing;
-  measure.style.whiteSpace = 'pre-wrap';
-  measure.style.wordBreak = 'break-word';
-  measure.style.overflowWrap = 'break-word';
 
   const lineHeight = parseFloat(editorStyle.lineHeight) || 22;
   const heights: number[] = [];
 
+  // Read per-line heights from the overlay's rendered children. The overlay
+  // shares font/padding/width/wrap rules with the editor, so each .ov-line's
+  // offsetHeight matches the textarea's visual line height (including wrap).
+  const overlayLines = overlay.querySelectorAll<HTMLElement>('.ov-line');
   for (let i = 0; i < lines.length; i++) {
-    // Use a non-breaking placeholder for empty lines so the measure has at
-    // least one row of height.
     const text = lines[i].length === 0 ? ' ' : lines[i];
-    measure.textContent = text;
-    const h = measure.offsetHeight;
-    // Subtract the vertical padding that's applied on the measure box.
-    const padTop = parseFloat(editorStyle.paddingTop) || 0;
-    const padBot = parseFloat(editorStyle.paddingBottom) || 0;
-    const contentH = Math.max(lineHeight, h - padTop - padBot);
-    heights.push(contentH);
+    const el = overlayLines[i];
+    const h = el ? el.offsetHeight : lineHeight;
+    heights.push(Math.max(lineHeight, h));
   }
 
   // Build line-number column
@@ -320,6 +338,28 @@ function layoutGutters() {
   lineGutter.style.paddingBottom = padBot + 'px';
   resultGutter.style.paddingTop = padTop + 'px';
   resultGutter.style.paddingBottom = padBot + 'px';
+
+  // Size the line-number column to fit the widest label (e.g. "L1234").
+  // Measure the actual rendered width of the largest label. Use individual
+  // font properties (not the `font` shorthand) because Chromium returns an
+  // empty string for getComputedStyle().font when the font is set via
+  // individual longhand properties.
+  const probe = document.createElement('span');
+  probe.style.position = 'absolute';
+  probe.style.visibility = 'hidden';
+  probe.style.whiteSpace = 'pre';
+  probe.style.fontFamily = editorStyle.fontFamily;
+  probe.style.fontSize = editorStyle.fontSize;
+  probe.style.fontWeight = editorStyle.fontWeight;
+  probe.style.letterSpacing = editorStyle.letterSpacing;
+  probe.textContent = `L${lines.length}`;
+  document.body.appendChild(probe);
+  const labelWidth = probe.offsetWidth;
+  probe.remove();
+  const gutterStyle = getComputedStyle(lineGutter);
+  const gutterPadX = (parseFloat(gutterStyle.paddingLeft) || 0) +
+                     (parseFloat(gutterStyle.paddingRight) || 0);
+  lineGutter.style.minWidth = Math.ceil(labelWidth + gutterPadX + 6) + 'px';
 
   lineGutter.innerHTML = heights
     .map((h, i) => `<div class="row" style="height:${h}px">L${i + 1}</div>`)

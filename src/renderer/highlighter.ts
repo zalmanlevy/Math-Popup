@@ -29,10 +29,12 @@ export function highlightNote(text: string, lineResults: LineResult[], mode: Mod
     .map((line, i) => {
       const r = lineResults[i];
       const tokens = tokenizeLine(line, r, ctx, mode);
-      // Need a trailing space so a final empty line still has measurable height.
-      return tokens || '&#8203;';
+      // Each line wrapped in its own block element so layoutGutters can read
+      // per-line rendered heights (handles wrap accurately because the overlay
+      // shares width/font/wrap rules with the editor).
+      return `<div class="ov-line">${tokens || '&#8203;'}</div>`;
     })
-    .join('\n');
+    .join('');
 }
 
 function tokenizeLine(line: string, r: LineResult | undefined, ctx: HighlightContext, mode: Mode): string {
