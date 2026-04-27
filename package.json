@@ -1,6 +1,6 @@
 {
   "name": "math-popup",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "private": true,
   "description": "Tray-resident notepad for quick math, variables, line refs, percentages and markdown.",
   "author": "Zalman Levy",

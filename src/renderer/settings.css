@@ -7,10 +7,47 @@
   --text-soft: #6b7280;
   --text-faint: #9ca3af;
   --accent: #2563eb;
+  --accent-soft: rgba(37, 99, 235, 0.15);
   --error: #dc2626;
+  --error-soft: #fee2e2;
+  --error-border: #fecaca;
   --result: #16a34a;
   --font-ui: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
   --font-mono: ui-monospace, SFMono-Regular, "JetBrains Mono", Menlo, Consolas, "Liberation Mono", monospace;
+}
+
+:root[data-theme="dark"] {
+  --bg: #0f1115;
+  --bg-elev: #181b22;
+  --bg-soft: #232732;
+  --border: #2a2f3a;
+  --text: #e6e8ee;
+  --text-soft: #9aa3b2;
+  --text-faint: #5f6776;
+  --accent: #60a5fa;
+  --accent-soft: rgba(96, 165, 250, 0.22);
+  --error: #f87171;
+  --error-soft: rgba(248, 113, 113, 0.18);
+  --error-border: rgba(248, 113, 113, 0.4);
+  --result: #4ade80;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root[data-theme="system"] {
+    --bg: #0f1115;
+    --bg-elev: #181b22;
+    --bg-soft: #232732;
+    --border: #2a2f3a;
+    --text: #e6e8ee;
+    --text-soft: #9aa3b2;
+    --text-faint: #5f6776;
+    --accent: #60a5fa;
+    --accent-soft: rgba(96, 165, 250, 0.22);
+    --error: #f87171;
+    --error-soft: rgba(248, 113, 113, 0.18);
+    --error-border: rgba(248, 113, 113, 0.4);
+    --result: #4ade80;
+  }
 }
 
 * { box-sizing: border-box; }
@@ -87,7 +124,34 @@ section code {
   border: 1px solid var(--border);
   border-radius: 6px;
   background: var(--bg-elev);
+  color: var(--text);
   font-family: var(--font-mono);
+}
+
+.seg {
+  margin-left: auto;
+  display: inline-flex;
+  background: var(--bg-soft);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 2px;
+}
+.seg-btn {
+  border: 0;
+  background: transparent;
+  padding: 4px 12px;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text-soft);
+  border-radius: 6px;
+  cursor: pointer;
+  transition: background 120ms ease, color 120ms ease;
+}
+.seg-btn:hover { color: var(--text); }
+.seg-btn.active {
+  background: var(--bg-elev);
+  color: var(--accent);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.06);
 }
 
 table {
@@ -112,6 +176,7 @@ td input[type="text"], td input[type="number"] {
   border: 1px solid var(--border);
   border-radius: 6px;
   background: var(--bg-elev);
+  color: var(--text);
   font-family: var(--font-mono);
   font-size: 12px;
 }
@@ -133,8 +198,8 @@ td input[type="checkbox"] { transform: translateY(1px); }
 }
 .btn:hover { background: var(--bg-soft); }
 .btn.subtle { color: var(--text-soft); }
-.btn.danger { color: var(--error); border-color: #fecaca; }
-.btn.danger:hover { background: #fee2e2; }
+.btn.danger { color: var(--error); border-color: var(--error-border); }
+.btn.danger:hover { background: var(--error-soft); }
 
 footer {
   display: flex;

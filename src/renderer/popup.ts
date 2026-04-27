@@ -1,7 +1,7 @@
 import { evaluateNote, LineResult } from './evaluator';
 import { highlightNote } from './highlighter';
 import { formatWithCommas } from './formatter';
-import type { Mode, Settings, Suffix } from '../shared/types';
+import type { Mode, Settings, Suffix, ThemePref } from '../shared/types';
 
 const editor = document.getElementById('editor') as HTMLTextAreaElement;
 const overlay = document.getElementById('syntax-overlay') as HTMLPreElement;
@@ -11,7 +11,8 @@ const resultGutter = document.getElementById('result-gutter') as HTMLDivElement;
 const status = document.getElementById('status-msg') as HTMLSpanElement;
 const closeBtn = document.getElementById('close-window') as HTMLButtonElement;
 const settingsBtn = document.getElementById('open-settings') as HTMLButtonElement;
-const copyMdBtn = document.getElementById('copy-md') as HTMLButtonElement;
+const pinBtn = document.getElementById('toggle-pin') as HTMLButtonElement;
+const helpBtn = document.getElementById('open-help') as HTMLButtonElement;
 const modeMathBtn = document.getElementById('mode-math') as HTMLButtonElement;
 const modeTextBtn = document.getElementById('mode-text') as HTMLButtonElement;
 
@@ -22,10 +23,18 @@ let saveTimer: number | null = null;
 async function init() {
   settings = await window.mathPopup.getSettings();
   editor.value = settings.noteContent ?? '';
+  applyTheme(settings.theme);
   applyMode(settings.mode);
+  applyAlwaysOnTop(settings.alwaysOnTop);
   bindEvents();
+  // Re-render syntax overlay if the system theme flips while the app is open.
+  window.mathPopup.onThemeChanged(() => render());
   render();
   editor.focus();
+}
+
+function applyTheme(theme: ThemePref) {
+  document.documentElement.setAttribute('data-theme', theme);
 }
 
 function bindEvents() {
@@ -36,7 +45,8 @@ function bindEvents() {
 
   closeBtn.addEventListener('click', () => window.mathPopup.hidePopup());
   settingsBtn.addEventListener('click', () => window.mathPopup.openSettings());
-  copyMdBtn.addEventListener('click', copyAsMarkdown);
+  pinBtn.addEventListener('click', toggleAlwaysOnTop);
+  helpBtn.addEventListener('click', () => window.mathPopup.openHelp());
 
   modeMathBtn.addEventListener('click', () => setMode('math'));
   modeTextBtn.addEventListener('click', () => setMode('text'));
@@ -44,7 +54,9 @@ function bindEvents() {
   // Listen for settings changes pushed via a polling refresh-on-focus.
   window.addEventListener('focus', async () => {
     settings = await window.mathPopup.getSettings();
+    applyTheme(settings.theme);
     applyMode(settings.mode);
+    applyAlwaysOnTop(settings.alwaysOnTop);
     render();
   });
 }
@@ -64,6 +76,19 @@ function applyMode(mode: Mode) {
   modeMathBtn.setAttribute('aria-selected', mode === 'math' ? 'true' : 'false');
   modeTextBtn.classList.toggle('active', mode === 'text');
   modeTextBtn.setAttribute('aria-selected', mode === 'text' ? 'true' : 'false');
+}
+
+function applyAlwaysOnTop(on: boolean) {
+  pinBtn.classList.toggle('active', on);
+  pinBtn.setAttribute('aria-pressed', on ? 'true' : 'false');
+  pinBtn.title = on ? 'Stay on top: on' : 'Stay on top: off';
+}
+
+function toggleAlwaysOnTop() {
+  const next = !settings.alwaysOnTop;
+  settings.alwaysOnTop = next;
+  applyAlwaysOnTop(next);
+  window.mathPopup.setAlwaysOnTop(next);
 }
 
 function onInput() {

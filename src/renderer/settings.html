@@ -11,6 +11,19 @@
   </header>
   <main>
     <section>
+      <h2>Appearance</h2>
+      <div class="row">
+        <span>Theme</span>
+        <div id="theme-picker" class="seg" role="radiogroup" aria-label="Theme">
+          <button type="button" class="seg-btn" data-theme="system" role="radio" aria-checked="true">System</button>
+          <button type="button" class="seg-btn" data-theme="light" role="radio" aria-checked="false">Light</button>
+          <button type="button" class="seg-btn" data-theme="dark" role="radio" aria-checked="false">Dark</button>
+        </div>
+      </div>
+      <p class="hint">System follows your OS color scheme and updates automatically.</p>
+    </section>
+
+    <section>
       <h2>Behavior</h2>
       <label class="row toggle">
         <input id="launch-at-startup" type="checkbox" />

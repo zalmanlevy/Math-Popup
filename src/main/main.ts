@@ -1,4 +1,4 @@
-import { app, BrowserWindow, Tray, Menu, nativeImage, ipcMain, screen, globalShortcut } from 'electron';
+import { app, BrowserWindow, Tray, Menu, nativeImage, ipcMain, screen, globalShortcut, nativeTheme } from 'electron';
 import { join } from 'node:path';
 import { loadSettings, saveSettings, flushSettings } from './store';
 import { Settings } from '../shared/types';
@@ -9,11 +9,33 @@ const startedHidden = process.argv.includes('--hidden');
 let tray: Tray | null = null;
 let popupWindow: BrowserWindow | null = null;
 let settingsWindow: BrowserWindow | null = null;
+let helpWindow: BrowserWindow | null = null;
 
 const ICON_PATH = join(__dirname, '..', 'assets', 'icon.png');
 const PRELOAD_PATH = join(__dirname, 'preload.js');
 const POPUP_HTML = join(__dirname, '..', 'renderer', 'popup.html');
 const SETTINGS_HTML = join(__dirname, '..', 'renderer', 'settings.html');
+const HELP_HTML = join(__dirname, '..', 'renderer', 'help.html');
+
+const LIGHT_BG = '#fafafa';
+const DARK_BG = '#0f1115';
+
+function currentBg(): string {
+  return nativeTheme.shouldUseDarkColors ? DARK_BG : LIGHT_BG;
+}
+
+function applyThemeSource(theme: Settings['theme']) {
+  nativeTheme.themeSource = theme;
+}
+
+function broadcastTheme() {
+  for (const w of [popupWindow, settingsWindow, helpWindow]) {
+    if (w && !w.isDestroyed()) {
+      w.webContents.send('theme:changed', nativeTheme.shouldUseDarkColors ? 'dark' : 'light');
+      w.setBackgroundColor(currentBg());
+    }
+  }
+}
 
 function createPopup() {
   if (popupWindow && !popupWindow.isDestroyed()) {
@@ -41,11 +63,11 @@ function createPopup() {
     minHeight: 200,
     frame: false,
     transparent: false,
-    backgroundColor: '#fafafa',
+    backgroundColor: currentBg(),
     show: false,
     resizable: true,
     skipTaskbar: true,
-    alwaysOnTop: false,
+    alwaysOnTop: settings.alwaysOnTop,
     icon: ICON_PATH,
     webPreferences: {
       preload: PRELOAD_PATH,
@@ -96,9 +118,9 @@ function openSettings() {
   }
   settingsWindow = new BrowserWindow({
     width: 540,
-    height: 620,
+    height: 680,
     title: 'Math Popup — Settings',
-    backgroundColor: '#fafafa',
+    backgroundColor: currentBg(),
     autoHideMenuBar: true,
     icon: ICON_PATH,
     webPreferences: {
@@ -110,6 +132,30 @@ function openSettings() {
   });
   settingsWindow.loadFile(SETTINGS_HTML);
   settingsWindow.on('closed', () => { settingsWindow = null; });
+}
+
+function openHelp() {
+  if (helpWindow && !helpWindow.isDestroyed()) {
+    helpWindow.show();
+    helpWindow.focus();
+    return;
+  }
+  helpWindow = new BrowserWindow({
+    width: 720,
+    height: 760,
+    title: 'Math Popup — Help',
+    backgroundColor: currentBg(),
+    autoHideMenuBar: true,
+    icon: ICON_PATH,
+    webPreferences: {
+      preload: PRELOAD_PATH,
+      contextIsolation: true,
+      sandbox: false,
+      nodeIntegration: false
+    }
+  });
+  helpWindow.loadFile(HELP_HTML);
+  helpWindow.on('closed', () => { helpWindow = null; });
 }
 
 function buildTray() {
@@ -148,21 +194,34 @@ function registerIPC() {
     if (Object.prototype.hasOwnProperty.call(partial, 'launchAtStartup')) {
       applyStartup(updated.launchAtStartup);
     }
+    if (Object.prototype.hasOwnProperty.call(partial, 'theme')) {
+      applyThemeSource(updated.theme);
+      broadcastTheme();
+    }
     return updated;
   });
   ipcMain.handle('window:hide', () => {
     if (popupWindow && !popupWindow.isDestroyed()) popupWindow.hide();
   });
+  ipcMain.handle('window:setAlwaysOnTop', (_e, on: boolean) => {
+    if (popupWindow && !popupWindow.isDestroyed()) popupWindow.setAlwaysOnTop(on);
+    saveSettings({ alwaysOnTop: on });
+  });
   ipcMain.handle('settings:open', () => openSettings());
+  ipcMain.handle('help:open', () => openHelp());
 }
 
 app.whenReady().then(() => {
   registerIPC();
+  const initial = loadSettings();
+  applyThemeSource(initial.theme);
+  // Push theme to all open windows whenever the OS or themeSource changes.
+  nativeTheme.on('updated', broadcastTheme);
   buildTray();
   // Sync the OS auto-launch entry with the saved setting on every boot, so
   // toggling the setting takes effect from then on (including any path
   // changes if the project was moved).
-  applyStartup(loadSettings().launchAtStartup);
+  applyStartup(initial.launchAtStartup);
   // When launched at OS login, start hidden — tray icon only, no popup.
   if (!startedHidden) createPopup();
 

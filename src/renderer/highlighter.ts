@@ -74,7 +74,7 @@ function tokenizeMath(line: string, r: LineResult | undefined, ctx: HighlightCon
       out.push(escapeHtml(m[1]));
     } else if (m[2]) {
       const ident = m[2];
-      if (/^L\d+$/.test(ident)) {
+      if (/^L\d+$/i.test(ident)) {
         out.push(`<span class="tk-lref">${ident}</span>`);
       } else if (/^bps?$/i.test(ident)) {
         out.push(`<span class="tk-bps">${ident}</span>`);

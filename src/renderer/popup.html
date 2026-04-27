@@ -15,7 +15,8 @@
     </div>
     <div class="title-spacer"></div>
     <div class="actions">
-      <button id="copy-md" title="Copy as markdown (Ctrl+Shift+M)" class="icon-btn">md</button>
+      <button id="toggle-pin" title="Stay on top" class="icon-btn" aria-pressed="false">📌</button>
+      <button id="open-help" title="Help" class="icon-btn">?</button>
       <button id="open-settings" title="Settings" class="icon-btn">⚙</button>
       <button id="close-window" title="Close" class="icon-btn close">×</button>
     </div>
@@ -37,7 +38,7 @@
   </main>
   <footer class="status-bar">
     <span id="status-msg" class="status-msg">Ready</span>
-    <span class="hint">Ctrl+Shift+C copy result · Ctrl+Shift+M copy markdown</span>
+    <span class="hint">Ctrl+Shift+C copy result</span>
   </footer>
   <script src="popup.js"></script>
 </body>

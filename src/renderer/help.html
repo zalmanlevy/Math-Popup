@@ -1,0 +1,219 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Math Popup — Help</title>
+  <link rel="stylesheet" href="help.css" />
+</head>
+<body>
+  <header class="page-header">
+    <h1>Math Popup</h1>
+    <p class="subtitle">A floating notepad that does the math while you type.</p>
+  </header>
+
+  <nav class="toc" aria-label="Table of contents">
+    <a href="#overview">Overview</a>
+    <a href="#window">Window controls</a>
+    <a href="#modes">Math &amp; text modes</a>
+    <a href="#numbers">Numbers &amp; formatting</a>
+    <a href="#suffixes">Suffixes (k, m, b, t)</a>
+    <a href="#variables">Variables</a>
+    <a href="#linerefs">Line references</a>
+    <a href="#percent">Percent &amp; basis points</a>
+    <a href="#functions">Functions &amp; constants</a>
+    <a href="#markdown">Markdown</a>
+    <a href="#shortcuts">Keyboard shortcuts</a>
+    <a href="#tray">Tray &amp; startup</a>
+    <a href="#settings">Settings</a>
+    <a href="#storage">Storage &amp; privacy</a>
+  </nav>
+
+  <main>
+    <section id="overview">
+      <h2>Overview</h2>
+      <p>Math Popup is a small always-available notepad. Each line is evaluated
+        as a math expression and the result appears in the right gutter. You can
+        use it like a back-of-the-envelope calculator that keeps a running
+        history, or switch it into plain Text mode and use it as a tray-resident
+        scratchpad.</p>
+      <p>The window lives in the system tray. Click the tray icon to toggle it,
+        or press <kbd>Ctrl</kbd>+<kbd>Alt</kbd>+<kbd>M</kbd> from anywhere.</p>
+    </section>
+
+    <section id="window">
+      <h2>Window controls</h2>
+      <p>The header from left to right:</p>
+      <ul>
+        <li><strong>Drag handle</strong> — click and drag anywhere in the header to move the window.</li>
+        <li><strong>Math / Text</strong> — switch the editor between math evaluation and plain text.</li>
+        <li><strong>📌 Pin</strong> — keep the window above other apps. Highlights when active.</li>
+        <li><strong>?</strong> — opens this help page.</li>
+        <li><strong>⚙</strong> — opens Settings.</li>
+        <li><strong>×</strong> — hides the window. The app stays in the tray.</li>
+      </ul>
+      <p>The window is resizable from any edge. Position and size are remembered
+        between sessions.</p>
+    </section>
+
+    <section id="modes">
+      <h2>Math &amp; text modes</h2>
+      <p><strong>Math mode</strong> shows two gutters: line numbers on the left
+        (<code>L1</code>, <code>L2</code>, …) and the evaluated result on the
+        right. Syntax highlighting colors numbers, operators, variables, line
+        refs, parentheses, and percent signs.</p>
+      <p><strong>Text mode</strong> hides the result column and turns off math
+        evaluation. Markdown styling (headers, bullets, bold, italic) still
+        renders so you can take notes comfortably.</p>
+    </section>
+
+    <section id="numbers">
+      <h2>Numbers &amp; formatting</h2>
+      <ul>
+        <li>Type any expression: <code>(12 + 5) * 3</code> → <code>51</code>.</li>
+        <li>Bare decimals get a leading zero automatically: <code>.5</code> → <code>0.5</code>.</li>
+        <li>Numbers with 4+ digits get commas inserted on space, operator, or Enter:
+          <code>1000</code> → <code>1,000</code>. Toggleable in Settings.</li>
+        <li>Commas in input are ignored when evaluating, so <code>1,000 + 1,000</code> works.</li>
+        <li>Results are formatted with commas and trimmed to your decimal cap.</li>
+      </ul>
+    </section>
+
+    <section id="suffixes">
+      <h2>Suffixes (k, m, b, t)</h2>
+      <p>Type a number followed by a suffix, then press space — the editor
+        expands it to the full number:</p>
+      <ul>
+        <li><code>5k</code> → <code>5,000</code></li>
+        <li><code>1.5m</code> → <code>1,500,000</code></li>
+        <li><code>2b</code> → <code>2,000,000,000</code></li>
+        <li><code>3t</code> → <code>3,000,000,000,000</code></li>
+      </ul>
+      <p>You can add or edit your own suffixes in <em>Settings → Custom suffixes</em>.
+        Each suffix has a symbol, a multiplier, and a case-sensitivity flag.</p>
+      <p>If you turn off "Expand suffixes in editor", the typed text stays as
+        <code>5k</code> but the evaluator still computes the right value.</p>
+    </section>
+
+    <section id="variables">
+      <h2>Variables</h2>
+      <p>Define a variable on its own line, then reference it later:</p>
+      <pre><code>price = 12.50
+qty   = 7
+price * qty</code></pre>
+      <p>Variable names use letters, digits, and underscores, and must start
+        with a letter or underscore. Reserved names like <code>L1</code>,
+        <code>pi</code>, <code>e</code>, <code>true</code>, and <code>false</code>
+        cannot be redefined.</p>
+    </section>
+
+    <section id="linerefs">
+      <h2>Line references</h2>
+      <p>Refer to the result of any earlier line with <code>L</code> followed by
+        the line number. Case doesn't matter — <code>L1</code> and <code>l1</code>
+        both work:</p>
+      <pre><code>1,000 + 250
+L1 * 0.07</code></pre>
+      <p>Line refs always pull the most recent successful value of that line.
+        If a referenced line doesn't have a number, the reference resolves to
+        <code>NaN</code>.</p>
+    </section>
+
+    <section id="percent">
+      <h2>Percent &amp; basis points</h2>
+      <p><strong>%</strong> after a number means "of one":
+        <code>50 * 20%</code> → <code>10</code>. With a leading <code>+</code>
+        or <code>-</code> it becomes "relative to the left side":</p>
+      <ul>
+        <li><code>200 + 10%</code> → <code>220</code> (10% of 200, added)</li>
+        <li><code>200 - 5%</code> → <code>190</code></li>
+      </ul>
+      <p><strong>bps</strong> (or <strong>bp</strong>) is basis points — one
+        hundredth of a percent. Same relative behavior:</p>
+      <ul>
+        <li><code>1,000,000 + 25bps</code> → <code>1,002,500</code></li>
+        <li><code>50bps</code> → <code>0.005</code></li>
+      </ul>
+    </section>
+
+    <section id="functions">
+      <h2>Functions &amp; constants</h2>
+      <p>Powered by <a href="https://mathjs.org" target="_blank" rel="noopener">mathjs</a>,
+        so you have access to a large standard library. Common built-ins
+        recognized by the syntax highlighter:</p>
+      <ul>
+        <li>Constants: <code>pi</code>, <code>e</code>, <code>tau</code>, <code>phi</code></li>
+        <li>Trig: <code>sin</code>, <code>cos</code>, <code>tan</code>, <code>asin</code>, <code>acos</code>, <code>atan</code>, <code>atan2</code></li>
+        <li>Logs &amp; exp: <code>log</code>, <code>log2</code>, <code>log10</code>, <code>ln</code>, <code>exp</code></li>
+        <li>Roots &amp; rounding: <code>sqrt</code>, <code>abs</code>, <code>round</code>, <code>floor</code>, <code>ceil</code></li>
+        <li>Aggregates: <code>min</code>, <code>max</code>, <code>sum</code>, <code>mean</code>, <code>median</code>, <code>mod</code></li>
+      </ul>
+      <p>Examples: <code>sqrt(2)</code>, <code>sin(pi / 4)</code>, <code>round(123.456, 1)</code>.</p>
+    </section>
+
+    <section id="markdown">
+      <h2>Markdown</h2>
+      <p>Light markdown styling renders inline:</p>
+      <ul>
+        <li><code># Heading</code>, <code>## Heading</code>, <code>### Heading</code> — header lines are not evaluated.</li>
+        <li><code>- item</code> or <code>* item</code> — bulleted line. The content after the bullet is still evaluated as math (in math mode).</li>
+        <li><code>**bold**</code> and <code>*italic*</code> — inline emphasis.</li>
+      </ul>
+    </section>
+
+    <section id="shortcuts">
+      <h2>Keyboard shortcuts</h2>
+      <table class="shortcut-table">
+        <tbody>
+          <tr><td><kbd>Ctrl</kbd>+<kbd>Alt</kbd>+<kbd>M</kbd></td><td>Show / hide the popup from anywhere</td></tr>
+          <tr><td><kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>C</kbd></td><td>Copy the current line's numeric result</td></tr>
+          <tr><td><kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>M</kbd></td><td>Copy the whole note as markdown with results inline</td></tr>
+          <tr><td><kbd>Tab</kbd></td><td>Smart-jump past the current number, inserting a trailing space and reformatting</td></tr>
+          <tr><td><kbd>Esc</kbd></td><td>Hide the popup</td></tr>
+          <tr><td><kbd>Space</kbd> / operator / <kbd>Enter</kbd></td><td>Triggers auto-format and suffix expansion</td></tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section id="tray">
+      <h2>Tray &amp; startup</h2>
+      <ul>
+        <li>Click the tray icon to toggle the popup. Double-click works too.</li>
+        <li>Right-click the tray icon for a menu: Open, Settings, Quit.</li>
+        <li>Closing the window only hides it — the app stays in the tray. Use
+          the tray menu's "Quit" to exit.</li>
+        <li>"Launch when Windows starts" puts the app in your login items. It
+          starts hidden, so only the tray icon appears until you click it.</li>
+      </ul>
+    </section>
+
+    <section id="settings">
+      <h2>Settings</h2>
+      <ul>
+        <li><strong>Theme</strong> — System (follows your OS), Light, or Dark.
+          System mode updates automatically when you change your OS color
+          scheme.</li>
+        <li><strong>Launch when Windows starts</strong> — auto-start hidden in
+          the tray.</li>
+        <li><strong>Auto-format numbers with commas</strong> — adds thousands
+          separators as you type.</li>
+        <li><strong>Expand suffixes in editor</strong> — turns <code>5m</code>
+          into <code>5,000,000</code> on space. Off keeps the typed form.</li>
+        <li><strong>Max decimal places</strong> — caps how many decimals are
+          shown in results. Integers omit the decimal point entirely.</li>
+        <li><strong>Custom suffixes</strong> — add your own multipliers (e.g.
+          <code>x</code> = 1000, <code>kg</code> = 1, etc.). Each row has a
+          symbol, multiplier, and case-sensitive toggle.</li>
+      </ul>
+    </section>
+
+    <section id="storage">
+      <h2>Storage &amp; privacy</h2>
+      <p>Everything is stored locally on your machine. Your note text, window
+        position, and settings are saved to a <code>settings.json</code> file in
+        the app's user-data folder. Nothing is sent over the network.</p>
+      <p>Your note auto-saves a few hundred milliseconds after you stop typing.</p>
+    </section>
+  </main>
+  <script src="help.js"></script>
+</body>
+</html>

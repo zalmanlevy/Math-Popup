@@ -54,6 +54,17 @@ const rendererSettingsCfg = {
   logLevel: 'info'
 };
 
+const rendererHelpCfg = {
+  entryPoints: [join(root, 'src/renderer/help.ts')],
+  bundle: true,
+  platform: 'browser',
+  target: 'chrome120',
+  format: 'iife',
+  outfile: join(root, 'dist/renderer/help.js'),
+  sourcemap: true,
+  logLevel: 'info'
+};
+
 async function ensureDir(p) {
   if (!existsSync(p)) await mkdir(p, { recursive: true });
 }
@@ -62,8 +73,10 @@ async function copyAssets() {
   await ensureDir(join(root, 'dist/renderer'));
   await copyFile(join(root, 'src/renderer/popup.html'), join(root, 'dist/renderer/popup.html'));
   await copyFile(join(root, 'src/renderer/settings.html'), join(root, 'dist/renderer/settings.html'));
+  await copyFile(join(root, 'src/renderer/help.html'), join(root, 'dist/renderer/help.html'));
   await copyFile(join(root, 'src/renderer/popup.css'), join(root, 'dist/renderer/popup.css'));
   await copyFile(join(root, 'src/renderer/settings.css'), join(root, 'dist/renderer/settings.css'));
+  await copyFile(join(root, 'src/renderer/help.css'), join(root, 'dist/renderer/help.css'));
 
   await ensureDir(join(root, 'dist/assets'));
   await copyFile(join(root, 'assets/icon.png'), join(root, 'dist/assets/icon.png'));
@@ -78,7 +91,8 @@ async function run() {
       context(mainCfg),
       context(preloadCfg),
       context(rendererPopupCfg),
-      context(rendererSettingsCfg)
+      context(rendererSettingsCfg),
+      context(rendererHelpCfg)
     ]);
     await copyAssets();
     await Promise.all(ctxs.map(c => c.watch()));
@@ -88,7 +102,8 @@ async function run() {
       build(mainCfg),
       build(preloadCfg),
       build(rendererPopupCfg),
-      build(rendererSettingsCfg)
+      build(rendererSettingsCfg),
+      build(rendererHelpCfg)
     ]);
     await copyAssets();
     console.log('[build] done');

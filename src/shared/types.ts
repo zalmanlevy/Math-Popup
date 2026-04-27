@@ -5,6 +5,7 @@ export interface Suffix {
 }
 
 export type Mode = 'math' | 'text';
+export type ThemePref = 'system' | 'light' | 'dark';
 
 export interface Settings {
   mode: Mode;                     // 'math' = full evaluator + gutters; 'text' = plain notepad
@@ -14,6 +15,8 @@ export interface Settings {
   expandSuffixesInEditor: boolean; // 1m -> 1,000,000 in textarea
   decimals: number;               // fixed number of decimal places shown in results
   noteContent: string;            // last saved note text
+  alwaysOnTop: boolean;           // pin window above other apps
+  theme: ThemePref;               // 'system' follows OS, otherwise forced
   windowBounds?: { x: number; y: number; width: number; height: number };
 }
 
@@ -29,5 +32,7 @@ export const DEFAULT_SETTINGS: Settings = {
   autoFormatNumbers: true,
   expandSuffixesInEditor: true,
   decimals: 2,
-  noteContent: ''
+  noteContent: '',
+  alwaysOnTop: false,
+  theme: 'system'
 };

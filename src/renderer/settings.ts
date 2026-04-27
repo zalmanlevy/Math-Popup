@@ -1,4 +1,4 @@
-import type { Settings, Suffix } from '../shared/types';
+import type { Settings, Suffix, ThemePref } from '../shared/types';
 import { DEFAULT_SETTINGS } from '../shared/types';
 
 const launchAtStartupEl = document.getElementById('launch-at-startup') as HTMLInputElement;
@@ -9,14 +9,25 @@ const tableBody = document.querySelector('#suffix-table tbody') as HTMLTableSect
 const addBtn = document.getElementById('add-suffix') as HTMLButtonElement;
 const resetBtn = document.getElementById('reset-defaults') as HTMLButtonElement;
 const saveStatus = document.getElementById('save-status') as HTMLSpanElement;
+const themePicker = document.getElementById('theme-picker') as HTMLDivElement;
 
 let settings: Settings;
 let dirtyTimer: number | null = null;
 
 async function init() {
   settings = await window.mathPopup.getSettings();
+  applyTheme(settings.theme);
   hydrate();
   bind();
+}
+
+function applyTheme(theme: ThemePref) {
+  document.documentElement.setAttribute('data-theme', theme);
+  themePicker.querySelectorAll<HTMLButtonElement>('.seg-btn').forEach(btn => {
+    const active = btn.dataset.theme === theme;
+    btn.classList.toggle('active', active);
+    btn.setAttribute('aria-checked', active ? 'true' : 'false');
+  });
 }
 
 function hydrate() {
@@ -46,6 +57,17 @@ function bind() {
     renderSuffixRows();
     save({ suffixes: settings.suffixes });
   });
+  themePicker.querySelectorAll<HTMLButtonElement>('.seg-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const theme = btn.dataset.theme as ThemePref;
+      applyTheme(theme);
+      save({ theme });
+    });
+  });
+  // Main pushes a theme:changed event whenever the OS scheme flips. The CSS
+  // media query handles the visual swap on its own when theme === 'system';
+  // we don't need to do anything here, but the listener keeps the channel open.
+  window.mathPopup.onThemeChanged(() => { /* CSS reacts via media query */ });
 }
 
 function renderSuffixRows() {

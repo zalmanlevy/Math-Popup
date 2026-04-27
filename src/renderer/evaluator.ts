@@ -33,7 +33,7 @@ export interface LineResult {
 const HEADER_RE = /^(\s*)(#{1,6})\s+(.*)$/;
 const BULLET_RE = /^(\s*)([-*])\s+(.*)$/;
 const ASSIGN_RE = /^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.+?)\s*$/;
-const LINE_REF_RE = /\bL(\d+)\b/g;
+const LINE_REF_RE = /\bL(\d+)\b/gi;
 // Identifier that does NOT start with the letter L followed only by digits
 // (so we don't match L1, L2). We'll handle refs in a separate pass.
 
