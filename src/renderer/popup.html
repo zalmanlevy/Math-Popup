@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Math Popup</title>
+  <link rel="stylesheet" href="popup.css" />
+</head>
+<body>
+  <header class="title-bar">
+    <div class="drag-handle"></div>
+    <div class="mode-toggle" role="tablist" aria-label="Mode">
+      <button id="mode-math" class="mode-btn active" data-mode="math" role="tab" aria-selected="true">Math</button>
+      <button id="mode-text" class="mode-btn" data-mode="text" role="tab" aria-selected="false">Text</button>
+    </div>
+    <div class="title-spacer"></div>
+    <div class="actions">
+      <button id="copy-md" title="Copy as markdown (Ctrl+Shift+M)" class="icon-btn">md</button>
+      <button id="open-settings" title="Settings" class="icon-btn">⚙</button>
+      <button id="close-window" title="Close" class="icon-btn close">×</button>
+    </div>
+  </header>
+  <main class="editor-shell">
+    <div id="line-gutter" class="line-gutter" aria-hidden="true"></div>
+    <div class="editor-stack">
+      <pre id="syntax-overlay" class="syntax-overlay" aria-hidden="true"></pre>
+      <textarea id="editor"
+                class="editor"
+                spellcheck="false"
+                autocomplete="off"
+                autocorrect="off"
+                autocapitalize="off"
+                wrap="soft"></textarea>
+      <div id="measure" class="measure" aria-hidden="true"></div>
+    </div>
+    <div id="result-gutter" class="result-gutter" aria-hidden="true"></div>
+  </main>
+  <footer class="status-bar">
+    <span id="status-msg" class="status-msg">Ready</span>
+    <span class="hint">Ctrl+Shift+C copy result · Ctrl+Shift+M copy markdown</span>
+  </footer>
+  <script src="popup.js"></script>
+</body>
+</html>

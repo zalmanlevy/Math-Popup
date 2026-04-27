@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Math Popup — Settings</title>
+  <link rel="stylesheet" href="settings.css" />
+</head>
+<body>
+  <header>
+    <h1>Settings</h1>
+  </header>
+  <main>
+    <section>
+      <h2>Behavior</h2>
+      <label class="row toggle">
+        <input id="launch-at-startup" type="checkbox" />
+        <span>Launch when Windows starts (opens hidden in the tray)</span>
+      </label>
+      <label class="row toggle">
+        <input id="auto-format" type="checkbox" />
+        <span>Auto-format numbers with commas (e.g. 1000 → 1,000)</span>
+      </label>
+      <label class="row toggle">
+        <input id="expand-suffixes" type="checkbox" />
+        <span>Expand suffixes in editor (e.g. <code>1m</code> → <code>1,000,000</code>)</span>
+      </label>
+      <label class="row">
+        <span>Max decimal places</span>
+        <input id="decimals" type="number" min="0" max="10" step="1" title="Cap on decimals shown — integers display without a decimal point, fractions only show the digits they need up to this cap." />
+      </label>
+    </section>
+
+    <section>
+      <h2>Custom suffixes</h2>
+      <p class="hint">Type a number then a suffix and press space. The number is multiplied by the suffix value.</p>
+      <table id="suffix-table">
+        <thead>
+          <tr>
+            <th>Symbol</th>
+            <th>Multiplier</th>
+            <th>Case sensitive</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody></tbody>
+      </table>
+      <button id="add-suffix" class="btn">+ Add suffix</button>
+    </section>
+  </main>
+  <footer>
+    <span id="save-status" class="save-status">Saved</span>
+    <button id="reset-defaults" class="btn subtle">Reset suffixes to defaults</button>
+  </footer>
+  <script src="settings.js"></script>
+</body>
+</html>
