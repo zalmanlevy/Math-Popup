@@ -15,6 +15,14 @@ contextBridge.exposeInMainWorld('mathPopup', {
     const listener = (_e: unknown, resolved: 'light' | 'dark') => cb(resolved);
     ipcRenderer.on('theme:changed', listener);
     return () => ipcRenderer.removeListener('theme:changed', listener);
+  },
+  getAppVersion: (): Promise<string> => ipcRenderer.invoke('app:getVersion'),
+  checkForUpdates: (): Promise<void> => ipcRenderer.invoke('update:check'),
+  installUpdate: (): Promise<void> => ipcRenderer.invoke('update:install'),
+  onUpdateStatus: (cb: (status: string) => void) => {
+    const listener = (_e: unknown, status: string) => cb(status);
+    ipcRenderer.on('update:status', listener);
+    return () => ipcRenderer.removeListener('update:status', listener);
   }
 });
 
@@ -29,6 +37,10 @@ declare global {
       openHelp(): Promise<void>;
       copyText(text: string): void;
       onThemeChanged(cb: (resolved: 'light' | 'dark') => void): () => void;
+      getAppVersion(): Promise<string>;
+      checkForUpdates(): Promise<void>;
+      installUpdate(): Promise<void>;
+      onUpdateStatus(cb: (status: string) => void): () => void;
     };
   }
 }

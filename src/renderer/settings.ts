@@ -10,6 +10,10 @@ const addBtn = document.getElementById('add-suffix') as HTMLButtonElement;
 const resetBtn = document.getElementById('reset-defaults') as HTMLButtonElement;
 const saveStatus = document.getElementById('save-status') as HTMLSpanElement;
 const themePicker = document.getElementById('theme-picker') as HTMLDivElement;
+const appVersionEl = document.getElementById('app-version') as HTMLSpanElement;
+const checkUpdatesBtn = document.getElementById('check-updates') as HTMLButtonElement;
+const installUpdateBtn = document.getElementById('install-update') as HTMLButtonElement;
+const updateStatusEl = document.getElementById('update-status') as HTMLSpanElement;
 
 let settings: Settings;
 let dirtyTimer: number | null = null;
@@ -19,6 +23,10 @@ async function init() {
   applyTheme(settings.theme);
   hydrate();
   bind();
+
+  window.mathPopup.getAppVersion().then(version => {
+    appVersionEl.textContent = version;
+  });
 }
 
 function applyTheme(theme: ThemePref) {
@@ -68,6 +76,39 @@ function bind() {
   // media query handles the visual swap on its own when theme === 'system';
   // we don't need to do anything here, but the listener keeps the channel open.
   window.mathPopup.onThemeChanged(() => { /* CSS reacts via media query */ });
+
+  checkUpdatesBtn.addEventListener('click', () => {
+    checkUpdatesBtn.disabled = true;
+    updateStatusEl.textContent = 'Checking...';
+    window.mathPopup.checkForUpdates();
+  });
+
+  installUpdateBtn.addEventListener('click', () => {
+    installUpdateBtn.disabled = true;
+    updateStatusEl.textContent = 'Relaunching...';
+    window.mathPopup.installUpdate();
+  });
+
+  window.mathPopup.onUpdateStatus((status: string) => {
+    if (status === 'checking') {
+      updateStatusEl.textContent = 'Checking for updates...';
+    } else if (status === 'available') {
+      updateStatusEl.textContent = 'Downloading update...';
+    } else if (status === 'not-available') {
+      updateStatusEl.textContent = 'App is up to date.';
+      checkUpdatesBtn.disabled = false;
+    } else if (status.startsWith('downloading:')) {
+      const percent = status.split(':')[1];
+      updateStatusEl.textContent = `Downloading (${percent}%)...`;
+    } else if (status === 'downloaded') {
+      updateStatusEl.textContent = 'Ready to install.';
+      checkUpdatesBtn.style.display = 'none';
+      installUpdateBtn.style.display = 'block';
+    } else if (status.startsWith('error:')) {
+      updateStatusEl.textContent = 'Failed: ' + status.substring(6);
+      checkUpdatesBtn.disabled = false;
+    }
+  });
 }
 
 function renderSuffixRows() {

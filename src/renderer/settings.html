@@ -59,6 +59,24 @@
       </table>
       <button id="add-suffix" class="btn">+ Add suffix</button>
     </section>
+
+    <section>
+      <h2>About</h2>
+      <div class="row">
+        <span>Version</span>
+        <span id="app-version" class="hint">...</span>
+      </div>
+      <div class="row" style="justify-content: flex-start; gap: 12px; margin-top: 8px;">
+        <button id="check-updates" type="button" class="btn">Check for Updates</button>
+        <button id="install-update" type="button" class="btn" style="display: none; background: var(--accent); color: white;">Relaunch & Install</button>
+        <span id="update-status" class="hint" style="align-self: center;"></span>
+      </div>
+      <div style="margin-top: 32px; text-align: center;">
+        <span class="hint" style="font-size: 0.9em;">
+          Made by Zalman Levy — <a href="https://zalmanlevy.com" target="_blank" style="color: inherit;">zalmanlevy.com</a>
+        </span>
+      </div>
+    </section>
   </main>
   <footer>
     <span id="save-status" class="save-status">Saved</span>

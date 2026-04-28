@@ -1,6 +1,6 @@
 {
   "name": "math-popup",
-  "version": "1.0.2",
+  "version": "1.0.6",
   "private": true,
   "description": "Tray-resident notepad for quick math, variables, line refs, percentages and markdown.",
   "author": "Zalman Levy",
@@ -15,6 +15,7 @@
     "dist:installer": "npm run build && electron-builder --win nsis"
   },
   "dependencies": {
+    "electron-updater": "^6.8.3",
     "mathjs": "^12.4.2"
   },
   "devDependencies": {
@@ -30,6 +31,13 @@
     "directories": {
       "output": "release"
     },
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "zalmanlevy",
+        "repo": "Math-Popup"
+      }
+    ],
     "files": [
       "dist/**/*",
       "package.json"
@@ -57,7 +65,7 @@
       "createDesktopShortcut": true,
       "createStartMenuShortcut": true,
       "shortcutName": "Math Popup",
-      "artifactName": "Math Popup Setup ${version}.exe"
+      "artifactName": "Math-Popup-Setup-${version}.exe"
     },
     "portable": {
       "artifactName": "MathPopup-${version}-portable.exe"

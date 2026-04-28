@@ -2,6 +2,7 @@ import { app, BrowserWindow, Tray, Menu, nativeImage, ipcMain, screen, globalSho
 import { join } from 'node:path';
 import { loadSettings, saveSettings, flushSettings } from './store';
 import { Settings } from '../shared/types';
+import { autoUpdater } from 'electron-updater';
 
 const isDev = !app.isPackaged;
 const startedHidden = process.argv.includes('--hidden');
@@ -209,6 +210,46 @@ function registerIPC() {
   });
   ipcMain.handle('settings:open', () => openSettings());
   ipcMain.handle('help:open', () => openHelp());
+
+  ipcMain.handle('app:getVersion', () => app.getVersion());
+  ipcMain.handle('update:check', () => {
+    // Only works in packaged app usually, but we can set it up to not fail in dev if we want, or just let it log.
+    if (app.isPackaged) {
+      autoUpdater.checkForUpdates().catch(err => {
+        if (settingsWindow && !settingsWindow.isDestroyed()) {
+          settingsWindow.webContents.send('update:status', `error:${err.message}`);
+        }
+      });
+    } else {
+      if (settingsWindow && !settingsWindow.isDestroyed()) {
+        settingsWindow.webContents.send('update:status', 'not-available'); // Simulate no update in dev
+      }
+    }
+  });
+  ipcMain.handle('update:install', () => {
+    if (app.isPackaged) {
+      // isSilent = true, isForceRunAfter = true
+      autoUpdater.quitAndInstall(true, true);
+    }
+  });
+
+  autoUpdater.autoDownload = true;
+  autoUpdater.autoInstallOnAppQuit = false;
+
+  const sendUpdateStatus = (status: string) => {
+    if (settingsWindow && !settingsWindow.isDestroyed()) {
+      settingsWindow.webContents.send('update:status', status);
+    }
+  };
+
+  autoUpdater.on('checking-for-update', () => sendUpdateStatus('checking'));
+  autoUpdater.on('update-available', () => sendUpdateStatus('available'));
+  autoUpdater.on('update-not-available', () => sendUpdateStatus('not-available'));
+  autoUpdater.on('error', (err) => sendUpdateStatus(`error:${err.message}`));
+  autoUpdater.on('download-progress', (progressObj) => {
+    sendUpdateStatus(`downloading:${Math.round(progressObj.percent)}`);
+  });
+  autoUpdater.on('update-downloaded', () => sendUpdateStatus('downloaded'));
 }
 
 app.whenReady().then(() => {
@@ -227,6 +268,16 @@ app.whenReady().then(() => {
 
   // Optional global shortcut to toggle the popup. Ctrl+Alt+M.
   globalShortcut.register('Control+Alt+M', togglePopup);
+
+  // Ensure any target="_blank" links open in the user's default web browser
+  app.on('web-contents-created', (_, contents) => {
+    contents.setWindowOpenHandler(({ url }) => {
+      if (url.startsWith('http')) {
+        require('electron').shell.openExternal(url);
+      }
+      return { action: 'deny' };
+    });
+  });
 });
 
 app.on('window-all-closed', (e: Electron.Event) => {
