@@ -1,6 +1,6 @@
 {
   "name": "math-popup",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "private": true,
   "description": "Tray-resident notepad for quick math, variables, line refs, percentages and markdown.",
   "author": "Zalman Levy",
@@ -56,7 +56,8 @@
       "allowToChangeInstallationDirectory": true,
       "createDesktopShortcut": true,
       "createStartMenuShortcut": true,
-      "shortcutName": "Math Popup"
+      "shortcutName": "Math Popup",
+      "artifactName": "Math Popup Setup ${version}.exe"
     },
     "portable": {
       "artifactName": "MathPopup-${version}-portable.exe"

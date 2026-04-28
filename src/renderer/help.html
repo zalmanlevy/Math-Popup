@@ -16,10 +16,21 @@
     <a href="#window">Window controls</a>
     <a href="#modes">Math &amp; text modes</a>
     <a href="#numbers">Numbers &amp; formatting</a>
+    <a href="#currency">Currency symbols</a>
+    <a href="#directives">Directives</a>
+    <a href="#slashmenu">Slash command menu</a>
     <a href="#suffixes">Suffixes (k, m, b, t)</a>
     <a href="#variables">Variables</a>
+    <a href="#varspopup">Variables popup (ƒ)</a>
     <a href="#linerefs">Line references</a>
+    <a href="#lineranges">Line ranges (L1:L4)</a>
+    <a href="#xoperator">x as multiplication</a>
     <a href="#percent">Percent &amp; basis points</a>
+    <a href="#excel">Excel-style formulas</a>
+    <a href="#iffunction">IF, TRUE / FALSE</a>
+    <a href="#equalsprefix">Excel = prefix</a>
+    <a href="#errors">Error indicators</a>
+    <a href="#selection">Selection footer</a>
     <a href="#functions">Functions &amp; constants</a>
     <a href="#markdown">Markdown</a>
     <a href="#shortcuts">Keyboard shortcuts</a>
@@ -47,6 +58,9 @@
         <li><strong>Drag handle</strong> — click and drag anywhere in the header to move the window.</li>
         <li><strong>Math / Text</strong> — switch the editor between math evaluation and plain text.</li>
         <li><strong>📌 Pin</strong> — keep the window above other apps. Highlights when active.</li>
+        <li><strong>ƒ Variables</strong> — hover to see every variable currently
+          defined in the note and its current value. Details in the
+          <a href="#varspopup">Variables popup</a> section below.</li>
         <li><strong>?</strong> — opens this help page.</li>
         <li><strong>⚙</strong> — opens Settings.</li>
         <li><strong>×</strong> — hides the window. The app stays in the tray.</li>
@@ -78,6 +92,56 @@
       </ul>
     </section>
 
+    <section id="currency">
+      <h2>Currency symbols</h2>
+      <p>Money symbols are recognized inside expressions and ignored when the
+        line is evaluated, so you can write what feels natural and still get a
+        result:</p>
+      <ul>
+        <li><code>$50 + $20</code> → <code>70</code></li>
+        <li><code>£1,000 * 1.05</code> → <code>1,050</code></li>
+        <li><code>€500 - 5%</code> → <code>475</code></li>
+      </ul>
+      <p>Recognized: <code>$ € £ ¥ ₹ ₽ ¢ ₩ ₪ ₫ ₴ ₸ ₺ ฿</code>. They render with a
+        muted color in the editor so you can see they're decorative.</p>
+    </section>
+
+    <section id="directives">
+      <h2>Directives</h2>
+      <p>Directives are special lines starting with <code>/</code> that change
+        how the lines below them are rendered. They produce no result themselves
+        and are styled with a colored pill so they're easy to spot.</p>
+      <ul>
+        <li><code>/no_dec_limit</code> — overrides your <em>Max decimal places</em>
+          setting for everything below this line. Results show their natural
+          number of decimals (trailing zeros are stripped) capped at <strong>6</strong>,
+          BA II Plus-style. Use it when you need more precision for one section
+          without opening Settings.</li>
+        <li><code>/clear</code> — wipes the entire note (useful when you've
+          finished a calculation and want a blank slate).</li>
+      </ul>
+      <p>Example with <em>Max decimal places</em> set to 2:</p>
+      <pre><code>10 / 3        → 3.33
+/no_dec_limit
+10 / 3        → 3.333333
+1 / 2         → 0.5
+6             → 6</code></pre>
+      <p>The <code>/no_dec_limit</code> directive must be on its own line and
+        applies until the end of the note — there's no reverse directive yet.</p>
+    </section>
+
+    <section id="slashmenu">
+      <h2>Slash command menu</h2>
+      <p>Type <code>/</code> at the start of any line and a popup appears with
+        all available slash commands. Continue typing to filter, use
+        <kbd>↑</kbd>/<kbd>↓</kbd> to move, and <kbd>Enter</kbd> or click to
+        confirm. <kbd>Esc</kbd> dismisses it.</p>
+      <p>The menu also flips above the caret when there isn't enough room
+        below, and shows up to 5 items at a time (longer lists scroll).</p>
+      <p>Available commands today: <code>/no_dec_limit</code> and
+        <code>/clear</code> — see the Directives section above.</p>
+    </section>
+
     <section id="suffixes">
       <h2>Suffixes (k, m, b, t)</h2>
       <p>Type a number followed by a suffix, then press space — the editor
@@ -92,6 +156,11 @@
         Each suffix has a symbol, a multiplier, and a case-sensitivity flag.</p>
       <p>If you turn off "Expand suffixes in editor", the typed text stays as
         <code>5k</code> but the evaluator still computes the right value.</p>
+      <p><strong>Smart Tab keeps the suffix attached.</strong> When you press
+        <kbd>Tab</kbd> with the caret inside a number that has a trailing
+        suffix (e.g. <code>10000k</code>), the caret jumps past the entire
+        token — the <code>k</code> is treated as part of the number, not
+        separated by a space.</p>
     </section>
 
     <section id="variables">
@@ -103,19 +172,77 @@ price * qty</code></pre>
       <p>Variable names use letters, digits, and underscores, and must start
         with a letter or underscore. Reserved names like <code>L1</code>,
         <code>pi</code>, <code>e</code>, <code>true</code>, and <code>false</code>
-        cannot be redefined.</p>
+        cannot be redefined — trying to assign to one shows
+        <strong>Reserved</strong> in the result column with a hover tooltip.</p>
+    </section>
+
+    <section id="varspopup">
+      <h2>Variables popup (ƒ)</h2>
+      <p>The <strong>ƒ</strong> button in the title bar opens a hover popup
+        listing every variable currently defined in the note, along with its
+        latest value and the line it was assigned on. Hover the button to open
+        it; move the cursor onto the popup to keep it open.</p>
+      <p>Each row shows:</p>
+      <ul>
+        <li>The variable name (with a small <code>L&lt;n&gt;</code> badge for
+          the line where it was last assigned).</li>
+        <li>The current evaluated value, formatted the same way as the result
+          gutter.</li>
+      </ul>
+      <p>If a variable is reassigned later in the note, only the most recent
+        value is shown — matching the way the evaluator updates the variable
+        line by line as it works through your expressions.</p>
+      <p>Variables that errored or weren't fully defined yet are skipped, and
+        the popup says "No variables defined yet." when the note doesn't have
+        any.</p>
     </section>
 
     <section id="linerefs">
       <h2>Line references</h2>
-      <p>Refer to the result of any earlier line with <code>L</code> followed by
-        the line number. Case doesn't matter — <code>L1</code> and <code>l1</code>
+      <p>Refer to the result of any line with <code>L</code> followed by the
+        line number. Case doesn't matter — <code>L1</code> and <code>l1</code>
         both work:</p>
       <pre><code>1,000 + 250
 L1 * 0.07</code></pre>
-      <p>Line refs always pull the most recent successful value of that line.
-        If a referenced line doesn't have a number, the reference resolves to
-        <code>NaN</code>.</p>
+      <p><strong>Line-ref popup:</strong> typing <code>L</code> on its own (not
+        as part of a longer word) opens a picker showing every line that has
+        a numeric result, e.g. <code>L1: 1,250</code>. Use the arrow keys to
+        navigate, <kbd>Enter</kbd> or click to insert the reference. The
+        popup follows the same flip-above / 5-item rules as the slash menu.</p>
+      <p><strong>Forward references work too.</strong> A line on row 2 can
+        reference <code>L3</code> or any later line — the evaluator runs in
+        passes until results stabilize, so forward refs resolve as long as
+        there's no circular dependency.</p>
+      <p><strong>Auto-shifting:</strong> when you insert or delete a whole
+        line, every <code>L&lt;n&gt;</code> reference (including ranges like
+        <code>L1:L4</code>) on surrounding lines is rewritten so they keep
+        pointing at the same target.</p>
+    </section>
+
+    <section id="lineranges">
+      <h2>Line ranges (L1:L4)</h2>
+      <p>Aggregate functions accept a colon-separated range of line refs that
+        expands to "every line from A through B". Empty / blank / erroring
+        lines inside the range are skipped, matching Excel's behavior:</p>
+      <pre><code>10
+20
+30
+SUM(L1:L3)        → 60
+AVERAGE(L1:L3)    → 20</code></pre>
+    </section>
+
+    <section id="xoperator">
+      <h2>x as multiplication</h2>
+      <p>The letter <code>x</code> works as a multiplication operator anywhere
+        between numbers, parens, or other identifiers:</p>
+      <ul>
+        <li><code>5x10</code> → <code>50</code></li>
+        <li><code>(L1 + L2) x 3</code></li>
+        <li><code>$25 x 4</code> → <code>100</code></li>
+      </ul>
+      <p>Because <code>x</code> is reserved as an operator, you can't define
+        a variable called <code>x</code>. If you try, the result column
+        shows <strong>N/A</strong> with a hover tooltip explaining why.</p>
     </section>
 
     <section id="percent">
@@ -133,6 +260,119 @@ L1 * 0.07</code></pre>
         <li><code>1,000,000 + 25bps</code> → <code>1,002,500</code></li>
         <li><code>50bps</code> → <code>0.005</code></li>
       </ul>
+    </section>
+
+    <section id="excel">
+      <h2>Excel-style formulas</h2>
+      <p>You can use a curated set of Excel-style functions, with line refs
+        and ranges as arguments. They're case-insensitive — type <code>SUM</code>,
+        <code>Sum</code>, or <code>sum</code> as you prefer.</p>
+      <table class="shortcut-table">
+        <thead>
+          <tr><th>Function</th><th>Signature</th><th>What it does</th></tr>
+        </thead>
+        <tbody>
+          <tr><td><code>SUM</code></td><td><code>SUM(value1, [value2], …)</code></td><td>Adds the numbers / ranges.</td></tr>
+          <tr><td><code>AVERAGE</code></td><td><code>AVERAGE(value1, [value2], …)</code></td><td>Arithmetic mean.</td></tr>
+          <tr><td><code>MEAN</code></td><td><code>MEAN(value1, [value2], …)</code></td><td>Same as AVERAGE.</td></tr>
+          <tr><td><code>MAX</code></td><td><code>MAX(value1, [value2], …)</code></td><td>Largest value.</td></tr>
+          <tr><td><code>MIN</code></td><td><code>MIN(value1, [value2], …)</code></td><td>Smallest value.</td></tr>
+          <tr><td><code>COUNT</code></td><td><code>COUNT(value1, [value2], …)</code></td><td>How many entries are numbers.</td></tr>
+          <tr><td><code>MEDIAN</code></td><td><code>MEDIAN(value1, [value2], …)</code></td><td>Middle value.</td></tr>
+          <tr><td><code>ROUND</code></td><td><code>ROUND(number, num_digits)</code></td><td>Rounds to N digits.</td></tr>
+          <tr><td><code>CEIL</code></td><td><code>CEIL(number)</code></td><td>Rounds up.</td></tr>
+          <tr><td><code>FLOOR</code></td><td><code>FLOOR(number)</code></td><td>Rounds down.</td></tr>
+          <tr><td><code>ABS</code></td><td><code>ABS(number)</code></td><td>Absolute value.</td></tr>
+          <tr><td><code>SQRT</code></td><td><code>SQRT(number)</code></td><td>Square root.</td></tr>
+          <tr><td><code>IF</code></td><td><code>IF(test, value_if_true, [value_if_false])</code></td><td>Branches by condition.</td></tr>
+          <tr><td><code>TODAY</code></td><td><code>TODAY()</code></td><td>Today's date as a number.</td></tr>
+          <tr><td><code>NOW</code></td><td><code>NOW()</code></td><td>Current date and time as a number.</td></tr>
+        </tbody>
+      </table>
+      <p>An Excel function is only treated as a call when it's directly
+        followed by <code>(</code>. Trying to use the name as a variable
+        (e.g. <code>sum = 5</code>) shows <strong>Excel Formula</strong> in
+        red in the result column with a hover tooltip listing every formula.</p>
+      <p><strong>Live signature tooltip:</strong> while you're typing inside
+        a function call, a small box near the caret shows the function
+        name, parameter list (with the current argument bolded in blue),
+        and a short description. It hides when you close the parenthesis or
+        leave the call.</p>
+    </section>
+
+    <section id="iffunction">
+      <h2>IF, TRUE, and FALSE</h2>
+      <p><code>IF(condition, value_if_true, value_if_false)</code> works the
+        way you'd expect from Excel, with a few quality-of-life conveniences:</p>
+      <ul>
+        <li><strong><code>=</code> means equality</strong> inside expressions —
+          <code>IF(L1=L2, …)</code> compares L1 and L2. The line-level
+          <code>name = expr</code> form is unaffected (that's still an
+          assignment).</li>
+        <li><strong>Bare <code>TRUE</code> and <code>FALSE</code></strong>
+          (uppercase) act as the string literals <code>"TRUE"</code> and
+          <code>"FALSE"</code>, so you don't have to wrap them in quotes:
+          <code>IF(L1=L2, TRUE, FALSE)</code>.</li>
+        <li><strong>Defaults:</strong> if you omit the second and third
+          arguments, IF returns <code>"TRUE"</code> when the condition is
+          truthy and <code>"FALSE"</code> otherwise:
+          <code>IF(L1=L2)</code> → <code>TRUE</code> or <code>FALSE</code>.</li>
+        <li><strong>Other strings need quotes.</strong> If you write
+          <code>IF(L1=L2, YES, NO)</code> the result column shows red
+          <strong>err</strong> with a hover tooltip "Add Quotations" — wrap
+          the values: <code>IF(L1=L2, "YES", "NO")</code>.</li>
+      </ul>
+    </section>
+
+    <section id="equalsprefix">
+      <h2>Excel <code>=</code> prefix</h2>
+      <p>If you have Excel muscle memory, you can prefix any formula with
+        <code>=</code> and it's stripped before evaluation:</p>
+      <ul>
+        <li><code>=SUM(L1:L4)</code> — same as <code>SUM(L1:L4)</code></li>
+        <li><code>=L1 * 1.05</code> — same as <code>L1 * 1.05</code></li>
+        <li><code>=TODAY()</code> — same as <code>TODAY()</code></li>
+      </ul>
+    </section>
+
+    <section id="errors">
+      <h2>Error indicators</h2>
+      <p>The result column shows different markers for different problems.
+        Hover over any of them to see a styled tooltip explaining the issue:</p>
+      <ul>
+        <li><strong>N/A</strong> — you tried to assign to <code>x</code>,
+          which is reserved as a multiplication operator.</li>
+        <li><strong>Excel Formula</strong> (red) — you tried to assign to a
+          name that's reserved as an Excel-style function (<code>sum</code>,
+          <code>round</code>, etc.). Tooltip lists every reserved name.</li>
+        <li><strong>Reserved</strong> — you tried to assign to a reserved
+          name like a line ref (<code>L1 = 5</code>), a math constant
+          (<code>pi = 5</code>), or a literal (<code>true = 5</code>). These
+          names can't be used as variables.</li>
+        <li><strong>err</strong> (red) — usually means a bare word the
+          evaluator doesn't recognize. Tooltip says "Add Quotations" when it
+          looks like an unquoted text value (the only words that work without
+          quotes are <code>TRUE</code> and <code>FALSE</code>).</li>
+        <li><strong>blank with red underline in the editor</strong> —
+          parse-in-progress: you're mid-typing an expression that isn't
+          finished yet (e.g. <code>SUM(</code>). The result column stays
+          empty so it doesn't flash error noise while you type.</li>
+      </ul>
+    </section>
+
+    <section id="selection">
+      <h2>Selection footer (Sum &amp; Avg)</h2>
+      <p>Highlight several lines in the editor and the status bar at the
+        bottom shows the sum and average of the numeric results in your
+        selection — handy for quick totals without writing a formula:</p>
+      <pre><code>10
+20
+30
+&nbsp;            ← select rows 1–3
+&nbsp;
+                Sum: 60   •   Avg: 20</code></pre>
+      <p>Lines without a numeric result are skipped. Single-line selections
+        fall back to the normal "Ready" / "N errors" status.</p>
     </section>
 
     <section id="functions">
@@ -165,10 +405,13 @@ L1 * 0.07</code></pre>
       <table class="shortcut-table">
         <tbody>
           <tr><td><kbd>Ctrl</kbd>+<kbd>Alt</kbd>+<kbd>M</kbd></td><td>Show / hide the popup from anywhere</td></tr>
+          <tr><td><kbd>Ctrl</kbd>+<kbd>Z</kbd></td><td>Undo (typing bursts grouped, programmatic edits captured)</td></tr>
+          <tr><td><kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>Z</kbd> / <kbd>Ctrl</kbd>+<kbd>Y</kbd></td><td>Redo</td></tr>
           <tr><td><kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>C</kbd></td><td>Copy the current line's numeric result</td></tr>
           <tr><td><kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>M</kbd></td><td>Copy the whole note as markdown with results inline</td></tr>
-          <tr><td><kbd>Tab</kbd></td><td>Smart-jump past the current number, inserting a trailing space and reformatting</td></tr>
-          <tr><td><kbd>Esc</kbd></td><td>Hide the popup</td></tr>
+          <tr><td><kbd>Tab</kbd></td><td>Smart-jump past the current number (including suffix), inserting a trailing space and reformatting</td></tr>
+          <tr><td><kbd>↑</kbd> / <kbd>↓</kbd> / <kbd>Enter</kbd></td><td>Navigate / confirm in the slash and L popups</td></tr>
+          <tr><td><kbd>Esc</kbd></td><td>Close an open popup, or hide the window if no popup is open</td></tr>
           <tr><td><kbd>Space</kbd> / operator / <kbd>Enter</kbd></td><td>Triggers auto-format and suffix expansion</td></tr>
         </tbody>
       </table>

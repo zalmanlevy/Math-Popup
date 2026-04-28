@@ -2,7 +2,7 @@
 // Inputs: the raw text and the per-line evaluator results (for error markers
 // and to know which identifiers are user variables).
 
-import { LineResult } from './evaluator';
+import { LineResult, EXCEL_FUNCTIONS, isExcelFunctionName, CURRENCY_SYMBOLS } from './evaluator';
 import type { Mode } from '../shared/types';
 
 const RESERVED_WORDS = new Set([
@@ -12,6 +12,8 @@ const RESERVED_WORDS = new Set([
   'min', 'max', 'sum', 'mean', 'median', 'mod',
   'true', 'false', 'null'
 ]);
+
+const CURRENCY_CHAR_RE = new RegExp(`^[${CURRENCY_SYMBOLS}]$`);
 
 export interface HighlightContext {
   knownVariables: Set<string>; // names defined elsewhere in the note
@@ -40,6 +42,15 @@ export function highlightNote(text: string, lineResults: LineResult[], mode: Mod
 function tokenizeLine(line: string, r: LineResult | undefined, ctx: HighlightContext, mode: Mode): string {
   if (line.length === 0) return '';
 
+  // `/no_dec_limit` / `/clear` directive line — render as a single styled
+  // token so it's visually obvious it isn't part of the math.
+  if (r?.kind === 'directive') {
+    const m = /^(\s*)(\/\S+)(\s*)$/.exec(line);
+    if (m) {
+      return `${escapeHtml(m[1])}<span class="tk-directive">${escapeHtml(m[2])}</span>${escapeHtml(m[3])}`;
+    }
+  }
+
   // Markdown header
   const hMatch = /^(\s*)(#{1,6})(\s+)(.*)$/.exec(line);
   if (hMatch) {
@@ -63,22 +74,38 @@ function tokenizeLine(line: string, r: LineResult | undefined, ctx: HighlightCon
 }
 
 // Tokenize a math-bearing line. Recognises numbers, identifiers, operators,
-// parens, %, bps/bp, and L<digit> line refs.
+// parens, %, bps/bp, L<digit> line refs, L<a>:L<b> ranges, currency symbols,
+// and `x` as a multiplication operator.
 function tokenizeMath(line: string, r: LineResult | undefined, ctx: HighlightContext): string {
   if (line.length === 0) return '';
   const out: string[] = [];
-  const tokenRe = /(\s+)|([A-Za-z_][A-Za-z0-9_]*)|([0-9][0-9,]*(?:\.[0-9]+)?|\.[0-9]+)|(%)|([+\-*/^=])|(\()|(\))|(.)/g;
+  // Order matters: line range BEFORE plain L<n> ref.
+  const tokenRe = /(\s+)|(L\d+\s*:\s*L\d+)|([A-Za-z_][A-Za-z0-9_]*)|([0-9][0-9,]*(?:\.[0-9]+)?|\.[0-9]+)|(%)|(:)|([+\-*/^=])|(\()|(\))|(.)/gi;
   let m: RegExpExecArray | null;
   while ((m = tokenRe.exec(line))) {
     if (m[1]) {
       out.push(escapeHtml(m[1]));
     } else if (m[2]) {
-      const ident = m[2];
-      if (/^L\d+$/i.test(ident)) {
+      // L<a>:L<b> range
+      out.push(`<span class="tk-lrange">${escapeHtml(m[2])}</span>`);
+    } else if (m[3]) {
+      const ident = m[3];
+      // Reserved-x error: render the bare `x` in the assignment with a
+      // strong reserved-marker style instead of variable blue.
+      if (/^x$/i.test(ident) && r?.errorKind === 'reserved-x') {
+        out.push(`<span class="tk-reserved-x">${escapeHtml(ident)}</span>`);
+      } else if (/^x$/i.test(ident)) {
+        // Standalone x is a multiplication operator.
+        out.push(`<span class="tk-op">${escapeHtml(ident)}</span>`);
+      } else if (/^L\d+$/i.test(ident)) {
         out.push(`<span class="tk-lref">${ident}</span>`);
       } else if (/^bps?$/i.test(ident)) {
         out.push(`<span class="tk-bps">${ident}</span>`);
-      } else if (RESERVED_WORDS.has(ident)) {
+      } else if (isExcelFunctionName(ident) && isFollowedByParen(line, tokenRe.lastIndex)) {
+        out.push(`<span class="tk-excel">${escapeHtml(ident)}</span>`);
+      } else if (isExcelFunctionName(ident) && r?.errorKind === 'reserved-excel') {
+        out.push(`<span class="tk-excel">${escapeHtml(ident)}</span>`);
+      } else if (RESERVED_WORDS.has(ident.toLowerCase())) {
         out.push(`<span class="tk-fn">${ident}</span>`);
       } else if (ctx.knownVariables.has(ident) || ident === r?.varName) {
         out.push(`<span class="tk-var">${ident}</span>`);
@@ -87,25 +114,40 @@ function tokenizeMath(line: string, r: LineResult | undefined, ctx: HighlightCon
         // call it an error — the user might be defining it elsewhere.
         out.push(`<span class="tk-var">${ident}</span>`);
       }
-    } else if (m[3]) {
-      out.push(`<span class="tk-num">${m[3]}</span>`);
     } else if (m[4]) {
-      out.push(`<span class="tk-pct">%</span>`);
+      out.push(`<span class="tk-num">${m[4]}</span>`);
     } else if (m[5]) {
-      out.push(`<span class="tk-op">${escapeHtml(m[5])}</span>`);
+      out.push(`<span class="tk-pct">%</span>`);
     } else if (m[6]) {
-      out.push(`<span class="tk-paren">(</span>`);
+      // Bare colon outside a range — just punctuation.
+      out.push(`<span class="tk-op">:</span>`);
     } else if (m[7]) {
-      out.push(`<span class="tk-paren">)</span>`);
+      out.push(`<span class="tk-op">${escapeHtml(m[7])}</span>`);
     } else if (m[8]) {
-      out.push(escapeHtml(m[8]));
+      out.push(`<span class="tk-paren">(</span>`);
+    } else if (m[9]) {
+      out.push(`<span class="tk-paren">)</span>`);
+    } else if (m[10]) {
+      const ch = m[10];
+      if (CURRENCY_CHAR_RE.test(ch)) {
+        out.push(`<span class="tk-currency">${escapeHtml(ch)}</span>`);
+      } else {
+        out.push(escapeHtml(ch));
+      }
     }
   }
   let html = out.join('');
-  if (r?.error) {
+  if (r?.error && r.errorKind !== 'reserved-x' && r.errorKind !== 'reserved-excel'
+      && r.errorKind !== 'reserved-name') {
     html = `<span class="tk-error">${html}</span>`;
   }
   return highlightInlineMarkdownPreserveSpans(html);
+}
+
+function isFollowedByParen(line: string, idx: number): boolean {
+  // Skip whitespace, then check for `(`.
+  while (idx < line.length && /\s/.test(line[idx])) idx++;
+  return line[idx] === '(';
 }
 
 // Pass over tokenized HTML and apply **bold** and *italic* on text content.
@@ -137,3 +179,7 @@ function escapeHtml(s: string): string {
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;');
 }
+
+// Re-export so popup.ts can read the function list (e.g. for the slash menu's
+// help tooltip if needed). Keeps import chain shallow.
+export { EXCEL_FUNCTIONS };
