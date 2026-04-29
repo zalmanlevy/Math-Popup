@@ -258,6 +258,7 @@ body.text-mode .result-gutter { display: none; }
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+  position: relative;
 }
 
 .result-gutter .row.error {
@@ -273,6 +274,42 @@ body.text-mode .result-gutter { display: none; }
 }
 .result-gutter .row.empty {
   color: transparent;
+}
+.result-gutter .row:not(.empty):hover {
+  background: rgba(22, 163, 74, 0.08);
+  border-radius: 3px;
+}
+.result-gutter .copy-icon {
+  position: absolute;
+  right: 3px;
+  bottom: 2px;
+  opacity: 0;
+  pointer-events: none;
+  color: var(--text-soft);
+  line-height: 1;
+  transition: opacity 120ms ease;
+}
+.result-gutter .row:not(.empty):hover .copy-icon {
+  opacity: 0.6;
+}
+.result-gutter .copy-icon.copied {
+  opacity: 1;
+  color: var(--result);
+}
+.copy-svg {
+  width: 10px;
+  height: 10px;
+  vertical-align: middle;
+  display: inline-block;
+}
+:root[data-theme="dark"] .result-gutter .row:not(.empty):hover,
+:root[data-theme="system"] .result-gutter .row:not(.empty):hover {
+  background: rgba(74, 222, 128, 0.08);
+}
+@media (prefers-color-scheme: dark) {
+  :root[data-theme="system"] .result-gutter .row:not(.empty):hover {
+    background: rgba(74, 222, 128, 0.08);
+  }
 }
 
 /* ---------- editor stack: textarea + overlay ---------- */
@@ -366,6 +403,30 @@ body.text-mode .result-gutter { display: none; }
   color: var(--error);
   text-decoration: underline wavy;
   text-decoration-thickness: 1px;
+}
+
+/* ---------- click-to-highlight token references ---------- */
+.tk-hl-ref {
+  background: var(--accent-soft);
+  border-radius: 3px;
+}
+.line-gutter .row.hl-lref {
+  color: #0ea5e9;
+  background: rgba(14, 165, 233, 0.12);
+  border-radius: 3px;
+  padding-left: 2px;
+  padding-right: 2px;
+}
+:root[data-theme="dark"] .line-gutter .row.hl-lref,
+:root[data-theme="system"] .line-gutter .row.hl-lref {
+  color: #38bdf8;
+  background: rgba(56, 189, 248, 0.12);
+}
+@media (prefers-color-scheme: dark) {
+  :root[data-theme="system"] .line-gutter .row.hl-lref {
+    color: #38bdf8;
+    background: rgba(56, 189, 248, 0.12);
+  }
 }
 
 /* ---------- command menu (slash + L) ---------- */
@@ -509,6 +570,14 @@ body.text-mode .result-gutter { display: none; }
 }
 .vars-popup .vars-row + .vars-row {
   border-top: 1px solid var(--border);
+}
+.vars-popup .vars-row {
+  cursor: pointer;
+  transition: background 100ms ease;
+  border-radius: 4px;
+}
+.vars-popup .vars-row:hover {
+  background: var(--bg-soft);
 }
 .vars-popup .vars-name {
   color: var(--accent);

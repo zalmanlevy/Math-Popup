@@ -90,7 +90,7 @@ export interface LineResult {
   stringValue?: string; // string result (e.g. IF returning "TRUE"/"FALSE")
   error?: string;      // short error message if eval failed (only set when no
                        //   stale fallback is available)
-  errorKind?: 'reserved-x' | 'reserved-excel' | 'reserved-name' | 'unquoted-string' | 'general';
+  errorKind?: 'reserved-x' | 'reserved-excel' | 'reserved-name' | 'unquoted-string' | 'duplicate-var' | 'general';
   errorTooltip?: string;  // longer message shown on hover for special errors
   varName?: string;    // assignment target, if any
   stale?: boolean;     // true when display/numeric is the previous render's
@@ -132,6 +132,8 @@ export const UNQUOTED_STRING_TOOLTIP =
   'Add Quotations — wrap text values in quotes (e.g. "YES" instead of YES). The only words that work without quotes are TRUE and FALSE.';
 export const RESERVED_NAME_TOOLTIP =
   'This name is reserved (line refs like L1/L2, constants pi/e, or true/false/null) and cannot be used as a variable.';
+export const DUPLICATE_VAR_TOOLTIP =
+  'This variable is already defined on a previous line. Rename one of them to avoid conflicts.';
 
 interface PreprocessCtx {
   scope: Record<string, number>;
@@ -140,6 +142,7 @@ interface PreprocessCtx {
   suffixes: Suffix[];
   previous: LineResult[];  // previous render's results (for stale fallback)
   decimals: number;
+  definedInThisPass?: Set<string>; // variable names assigned so far in this pass
 }
 
 export function isExcelFunctionName(name: string): boolean {
@@ -183,7 +186,18 @@ function evaluateOnePass(
 ): LineResult[] {
   const results: LineResult[] = [];
   const scope: Record<string, number> = {};
+  const definedInThisPass = new Set<string>();
   let currentDecimals = decimals;
+
+  // Pre-seed scope from the previous pass so forward variable references
+  // (a variable used above where it's defined) resolve on pass 2+.
+  // Lines evaluated top-to-bottom will overwrite these as they're reached,
+  // so the last definition still wins.
+  for (const r of snapshot) {
+    if (r.varName !== undefined && r.numeric !== undefined && isFinite(r.numeric)) {
+      scope[r.varName] = r.numeric;
+    }
+  }
 
   for (let i = 0; i < lines.length; i++) {
     const raw = lines[i];
@@ -205,7 +219,7 @@ function evaluateOnePass(
       continue;
     }
 
-    let r = evaluateLine(raw, i, { scope, results, snapshot, suffixes, previous, decimals: currentDecimals });
+    let r = evaluateLine(raw, i, { scope, results, snapshot, suffixes, previous, decimals: currentDecimals, definedInThisPass });
 
     // Sticky last-good-value: while the user is mid-edit, an expression line
     // may temporarily fail to parse. Carry over the previous render's numeric
@@ -213,7 +227,8 @@ function evaluateOnePass(
     // special reserved-name errors — those are user-facing intentional errors
     // and we don't want them to ever look successful.
     const isReservedErr = r.errorKind === 'reserved-x' || r.errorKind === 'reserved-excel'
-      || r.errorKind === 'reserved-name' || r.errorKind === 'unquoted-string';
+      || r.errorKind === 'reserved-name' || r.errorKind === 'unquoted-string'
+      || r.errorKind === 'duplicate-var';
     const hasResult = r.numeric !== undefined || r.stringValue !== undefined;
     if (!isReservedErr &&
         (r.kind === 'expression' || r.kind === 'assignment' || r.kind === 'bullet') &&
@@ -272,7 +287,7 @@ function evaluateLine(raw: string, index: number, ctx: PreprocessCtx): LineResul
   // Assignment: `name = expr`
   const asn = ASSIGN_RE.exec(raw);
   if (asn) {
-    const name = asn[1];
+    const name = asn[1].toLowerCase();
     const exprText = asn[2];
 
     // Reserved-name guards. These render specially in the result gutter as
@@ -307,6 +322,16 @@ function evaluateLine(raw: string, index: number, ctx: PreprocessCtx): LineResul
         errorTooltip: RESERVED_NAME_TOOLTIP
       };
     }
+    if (ctx.definedInThisPass?.has(name)) {
+      return {
+        index, kind: 'assignment', raw, varName: name,
+        display: '',
+        error: 'Duplicate',
+        errorKind: 'duplicate-var',
+        errorTooltip: DUPLICATE_VAR_TOOLTIP
+      };
+    }
+    ctx.definedInThisPass?.add(name);
     const evaluated = computeExpression(exprText, index, ctx);
     if (evaluated.error) {
       return {
@@ -347,7 +372,7 @@ function tryEvalExpression(raw: string, index: number, ctx: PreprocessCtx): Line
   // Strip currency / x / commas first when sniffing for math-like tokens, so
   // a line like "$50 x 2" is recognized.
   const sniff = raw.replace(CURRENCY_RE, '');
-  const looksLikeMath = /[0-9]|[+\-*/^()]|%|\bL\d+\b/.test(sniff) ||
+  const looksLikeMath = /(?<![A-Za-z_])[0-9]|[+\-*/^()]|%|\bL\d+\b/.test(sniff) ||
     hasKnownIdentifier(sniff, ctx) ||
     hasExcelCall(sniff);
   if (!looksLikeMath) {
@@ -384,7 +409,7 @@ function tryEvalExpression(raw: string, index: number, ctx: PreprocessCtx): Line
 
 function hasKnownIdentifier(raw: string, ctx: PreprocessCtx): boolean {
   const ids = raw.match(/[A-Za-z_][A-Za-z0-9_]*/g) ?? [];
-  return ids.some(id => Object.prototype.hasOwnProperty.call(ctx.scope, id));
+  return ids.some(id => Object.prototype.hasOwnProperty.call(ctx.scope, id.toLowerCase()));
 }
 
 function hasExcelCall(raw: string): boolean {
@@ -398,7 +423,8 @@ function hasExcelCall(raw: string): boolean {
 }
 
 function isReservedName(name: string): boolean {
-  return /^L\d+$/i.test(name) || ['pi', 'e', 'PI', 'E', 'true', 'false', 'null'].includes(name);
+  // name is already lowercased at the call site
+  return /^l\d+$/.test(name) || ['pi', 'e', 'true', 'false', 'null'].includes(name);
 }
 
 function computeExpression(
@@ -494,6 +520,14 @@ function computeExpression(
     //     comparison operator.
     s = s.replace(/(?<![=<>!])=(?!=)/g, '==');
 
+    // 4e. Normalise all remaining identifiers to lower-case so variable names
+    //     are case-insensitive (D0 and d0, Required and required, etc.).
+    //     By this point: L<n> refs are replaced (step 3), x/X is `*` (step 4),
+    //     Excel names are lowercased (step 4b), TRUE/FALSE are quoted (step 4c).
+    //     We skip content inside double-quoted strings to preserve "TRUE"/"FALSE".
+    s = s.replace(/"[^"]*"|\b([A-Za-z_][A-Za-z0-9_]*)\b/g, (m, ident) =>
+      ident !== undefined ? m.toLowerCase() : m);
+
     // 5. Apply percentage / bps preprocessor.
     s = preprocessPercentages(s);
 
@@ -575,4 +609,33 @@ function shortError(msg: string): string {
   const idx = msg.indexOf('\n');
   const first = idx >= 0 ? msg.slice(0, idx) : msg;
   return first.length > 80 ? first.slice(0, 77) + '…' : first;
+}
+
+// Evaluate an arbitrary sub-expression (e.g. text the user dragged over within
+// a line) using the scope visible at `lineIndex`. Returns the numeric result or
+// undefined if the text cannot be evaluated or is not numeric.
+export function evaluateSelectedText(
+  selectedText: string,
+  lineResults: LineResult[],
+  lineIndex: number,
+  suffixes: Suffix[],
+  decimals: number
+): number | undefined {
+  const scope: Record<string, number> = {};
+  for (let i = 0; i <= lineIndex; i++) {
+    const r = lineResults[i];
+    if (r && r.varName !== undefined && r.numeric !== undefined && isFinite(r.numeric)) {
+      scope[r.varName] = r.numeric;
+    }
+  }
+  const ctx: PreprocessCtx = {
+    scope,
+    results: lineResults.slice(0, lineIndex + 1),
+    suffixes,
+    previous: [],
+    decimals
+  };
+  const result = computeExpression(selectedText, lineIndex, ctx);
+  if (result.error || result.value === undefined || isNaN(result.value)) return undefined;
+  return result.value;
 }

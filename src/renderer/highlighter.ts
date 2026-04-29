@@ -5,6 +5,10 @@
 import { LineResult, EXCEL_FUNCTIONS, isExcelFunctionName, CURRENCY_SYMBOLS } from './evaluator';
 import type { Mode } from '../shared/types';
 
+export type ActiveToken =
+  | { type: 'var'; name: string }   // lowercased identifier
+  | { type: 'lref'; line: number }; // 1-based line number
+
 const RESERVED_WORDS = new Set([
   'pi', 'e', 'PI', 'E', 'tau', 'phi',
   'sin', 'cos', 'tan', 'asin', 'acos', 'atan', 'atan2',
@@ -19,7 +23,7 @@ export interface HighlightContext {
   knownVariables: Set<string>; // names defined elsewhere in the note
 }
 
-export function highlightNote(text: string, lineResults: LineResult[], mode: Mode = 'math'): string {
+export function highlightNote(text: string, lineResults: LineResult[], mode: Mode = 'math', activeToken?: ActiveToken | null): string {
   const lines = text.split('\n');
   const knownVariables = new Set<string>();
   for (const r of lineResults) {
@@ -30,7 +34,7 @@ export function highlightNote(text: string, lineResults: LineResult[], mode: Mod
   return lines
     .map((line, i) => {
       const r = lineResults[i];
-      const tokens = tokenizeLine(line, r, ctx, mode);
+      const tokens = tokenizeLine(line, r, ctx, mode, activeToken);
       // Each line wrapped in its own block element so layoutGutters can read
       // per-line rendered heights (handles wrap accurately because the overlay
       // shares width/font/wrap rules with the editor).
@@ -39,7 +43,7 @@ export function highlightNote(text: string, lineResults: LineResult[], mode: Mod
     .join('');
 }
 
-function tokenizeLine(line: string, r: LineResult | undefined, ctx: HighlightContext, mode: Mode): string {
+function tokenizeLine(line: string, r: LineResult | undefined, ctx: HighlightContext, mode: Mode, activeToken?: ActiveToken | null): string {
   if (line.length === 0) return '';
 
   // `/no_dec_limit` / `/clear` directive line — render as a single styled
@@ -63,20 +67,20 @@ function tokenizeLine(line: string, r: LineResult | undefined, ctx: HighlightCon
   const bMatch = /^(\s*)([-*])(\s+)(.*)$/.exec(line);
   if (bMatch) {
     const [, lead, mark, gap, rest] = bMatch;
-    const inner = mode === 'math' ? tokenizeMath(rest, r, ctx) : highlightInlineMarkdown(escapeHtml(rest));
+    const inner = mode === 'math' ? tokenizeMath(rest, r, ctx, activeToken) : highlightInlineMarkdown(escapeHtml(rest));
     return `${escapeHtml(lead)}<span class="md-bullet">${escapeHtml(mark)}</span>${escapeHtml(gap)}${inner}`;
   }
 
   if (mode === 'text') {
     return highlightInlineMarkdown(escapeHtml(line));
   }
-  return tokenizeMath(line, r, ctx);
+  return tokenizeMath(line, r, ctx, activeToken);
 }
 
 // Tokenize a math-bearing line. Recognises numbers, identifiers, operators,
 // parens, %, bps/bp, L<digit> line refs, L<a>:L<b> ranges, currency symbols,
 // and `x` as a multiplication operator.
-function tokenizeMath(line: string, r: LineResult | undefined, ctx: HighlightContext): string {
+function tokenizeMath(line: string, r: LineResult | undefined, ctx: HighlightContext, activeToken?: ActiveToken | null): string {
   if (line.length === 0) return '';
   const out: string[] = [];
   // Order matters: line range BEFORE plain L<n> ref.
@@ -90,6 +94,7 @@ function tokenizeMath(line: string, r: LineResult | undefined, ctx: HighlightCon
       out.push(`<span class="tk-lrange">${escapeHtml(m[2])}</span>`);
     } else if (m[3]) {
       const ident = m[3];
+      const identLow = ident.toLowerCase();
       // Reserved-x error: render the bare `x` in the assignment with a
       // strong reserved-marker style instead of variable blue.
       if (/^x$/i.test(ident) && r?.errorKind === 'reserved-x') {
@@ -98,21 +103,28 @@ function tokenizeMath(line: string, r: LineResult | undefined, ctx: HighlightCon
         // Standalone x is a multiplication operator.
         out.push(`<span class="tk-op">${escapeHtml(ident)}</span>`);
       } else if (/^L\d+$/i.test(ident)) {
-        out.push(`<span class="tk-lref">${ident}</span>`);
+        const lineNum = parseInt(ident.slice(1));
+        const isActive = activeToken?.type === 'lref' && activeToken.line === lineNum;
+        const cls = isActive ? 'tk-lref tk-hl-ref' : 'tk-lref';
+        out.push(`<span class="${cls}">${ident}</span>`);
       } else if (/^bps?$/i.test(ident)) {
         out.push(`<span class="tk-bps">${ident}</span>`);
       } else if (isExcelFunctionName(ident) && isFollowedByParen(line, tokenRe.lastIndex)) {
         out.push(`<span class="tk-excel">${escapeHtml(ident)}</span>`);
       } else if (isExcelFunctionName(ident) && r?.errorKind === 'reserved-excel') {
         out.push(`<span class="tk-excel">${escapeHtml(ident)}</span>`);
-      } else if (RESERVED_WORDS.has(ident.toLowerCase())) {
+      } else if (RESERVED_WORDS.has(identLow)) {
         out.push(`<span class="tk-fn">${ident}</span>`);
-      } else if (ctx.knownVariables.has(ident) || ident === r?.varName) {
-        out.push(`<span class="tk-var">${ident}</span>`);
+      } else if (ctx.knownVariables.has(identLow) || identLow === r?.varName) {
+        const isActive = activeToken?.type === 'var' && activeToken.name === identLow;
+        const cls = isActive ? 'tk-var tk-hl-ref' : 'tk-var';
+        out.push(`<span class="${cls}">${ident}</span>`);
       } else {
         // Unknown identifier in a math-looking line; tag as variable but don't
         // call it an error — the user might be defining it elsewhere.
-        out.push(`<span class="tk-var">${ident}</span>`);
+        const isActive = activeToken?.type === 'var' && activeToken.name === identLow;
+        const cls = isActive ? 'tk-var tk-hl-ref' : 'tk-var';
+        out.push(`<span class="${cls}">${ident}</span>`);
       }
     } else if (m[4]) {
       out.push(`<span class="tk-num">${m[4]}</span>`);

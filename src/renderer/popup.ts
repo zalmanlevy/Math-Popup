@@ -1,5 +1,5 @@
-import { evaluateNote, LineResult, EXCEL_FORMULA_TOOLTIP, X_RESERVED_TOOLTIP, UNQUOTED_STRING_TOOLTIP, RESERVED_NAME_TOOLTIP } from './evaluator';
-import { highlightNote } from './highlighter';
+import { evaluateNote, evaluateSelectedText, LineResult, EXCEL_FORMULA_TOOLTIP, X_RESERVED_TOOLTIP, UNQUOTED_STRING_TOOLTIP, RESERVED_NAME_TOOLTIP, DUPLICATE_VAR_TOOLTIP } from './evaluator';
+import { highlightNote, ActiveToken } from './highlighter';
 import { formatWithCommas, formatResult } from './formatter';
 import type { Mode, Settings, Suffix, ThemePref } from '../shared/types';
 
@@ -23,6 +23,10 @@ const hoverTooltip = document.getElementById('hover-tooltip') as HTMLDivElement;
 let settings: Settings;
 let lastResults: LineResult[] = [];
 let saveTimer: number | null = null;
+let activeToken: ActiveToken | null = null;
+
+const COPY_ICON_HTML = `<span class="copy-icon"><svg class="copy-svg" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="0.75" width="7.25" height="7.25" rx="1.25"/><rect x="0.75" y="4" width="7.25" height="7.25" rx="1.25"/></svg></span>`;
+const COPIED_ICON_HTML = `<svg class="copy-svg" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 6l3 3.5 5-7"/></svg>`;
 // Snapshot of editor.value from the end of the last input/auto-format pass,
 // used to detect whole-line inserts/deletes so L<n> refs can shift to follow
 // their target lines.
@@ -57,7 +61,7 @@ function bindEvents() {
     }, 100);
     hideSignatureTooltip();
   });
-  editor.addEventListener('click', () => updateMenuFromCaret());
+  editor.addEventListener('click', () => { updateMenuFromCaret(true); updateActiveToken(); });
   window.addEventListener('resize', () => render());
 
   closeBtn.addEventListener('click', () => window.mathPopup.hidePopup());
@@ -118,7 +122,12 @@ function toggleAlwaysOnTop() {
 }
 
 function onInput() {
-  if (settings.mode === 'math') maybeShiftLineRefs();
+  const previousToken = activeToken;
+  activeToken = null;
+  if (settings.mode === 'math') {
+    maybeSyncRename(previousToken);
+    maybeShiftLineRefs();
+  }
   noteTypingForUndo();
   previousText = editor.value;
   scheduleSave();
@@ -146,6 +155,115 @@ function maybeShiftLineRefs() {
   editor.value = rewritten.text;
   editor.selectionStart = rewritten.caret;
   editor.selectionEnd = rewritten.caretEnd;
+}
+
+// Synchronously apply edits made to the active token to all of its other occurrences.
+function maybeSyncRename(previousToken: ActiveToken | null) {
+  if (!previousToken || previousToken.type !== 'var') return;
+
+  const oldText = previousText;
+  const newText = editor.value;
+  if (oldText === newText) return;
+
+  // 1. Find the single contiguous edit.
+  let prefix = 0;
+  while (prefix < oldText.length && prefix < newText.length && oldText[prefix] === newText[prefix]) {
+    prefix++;
+  }
+  let suffix = 0;
+  while (suffix < oldText.length - prefix && suffix < newText.length - prefix && 
+         oldText[oldText.length - 1 - suffix] === newText[newText.length - 1 - suffix]) {
+    suffix++;
+  }
+
+  const editStart = prefix;
+  const oldEditEnd = oldText.length - suffix;
+  const newEditEnd = newText.length - suffix;
+  
+  const deletedText = oldText.slice(editStart, oldEditEnd);
+  const insertedText = newText.slice(editStart, newEditEnd);
+
+  // 2. Find all occurrences of the variable in the old text.
+  const occurrences: {start: number, end: number}[] = [];
+  const re = new RegExp(`\\b${previousToken.name}\\b`, 'gi');
+  let m;
+  while ((m = re.exec(oldText)) !== null) {
+    occurrences.push({ start: m.index, end: m.index + m[0].length });
+  }
+
+  if (occurrences.length <= 1) return;
+
+  // 3. Ensure the edit is fully contained within exactly one occurrence.
+  const editedOccIdx = occurrences.findIndex(occ => occ.start <= editStart && oldEditEnd <= occ.end);
+  if (editedOccIdx === -1) return;
+
+  const editedOcc = occurrences[editedOccIdx];
+
+  // 4. Ensure we are editing the "base" definition, not a reference.
+  const lineIndex = (oldText.slice(0, editedOcc.start).match(/\n/g) || []).length;
+  const lineResult = lastResults[lineIndex];
+  if (!lineResult || !lineResult.varName || lineResult.varName.toLowerCase() !== previousToken.name.toLowerCase()) {
+    return; // The line doesn't define this variable.
+  }
+
+  const lineStart = oldText.lastIndexOf('\n', editedOcc.start - 1) + 1;
+  const textBeforeOccOnLine = oldText.slice(lineStart, editedOcc.start);
+  const isFirstOnLine = !new RegExp(`\\b${previousToken.name}\\b`, 'i').test(textBeforeOccOnLine);
+  if (!isFirstOnLine) {
+    return; // We are editing a reference that happens to be on the same line as the definition.
+  }
+
+  const relStart = editStart - editedOcc.start;
+  const relEnd = oldEditEnd - editedOcc.start;
+  const delta = insertedText.length - deletedText.length;
+
+  let outText = oldText;
+  let newCaretStart = editor.selectionStart;
+  let newCaretEnd = editor.selectionEnd;
+
+  // Apply the exact same edit to all occurrences, from right to left to preserve offsets.
+  for (let i = occurrences.length - 1; i >= 0; i--) {
+    const occ = occurrences[i];
+
+    // Do not mirror edits to OTHER base variable definitions.
+    if (i !== editedOccIdx) {
+      const occLineIndex = (oldText.slice(0, occ.start).match(/\n/g) || []).length;
+      const occLineResult = lastResults[occLineIndex];
+      const isBaseLine = occLineResult && occLineResult.varName && occLineResult.varName.toLowerCase() === previousToken.name.toLowerCase();
+      
+      if (isBaseLine) {
+        const occLineStart = oldText.lastIndexOf('\n', occ.start - 1) + 1;
+        const occTextBefore = oldText.slice(occLineStart, occ.start);
+        const occIsFirst = !new RegExp(`\\b${previousToken.name}\\b`, 'i').test(occTextBefore);
+        if (occIsFirst) {
+          continue; // Skip applying edit to this other base definition
+        }
+      }
+    }
+
+    const absStart = occ.start + relStart;
+    const absEnd = occ.start + relEnd;
+    outText = outText.slice(0, absStart) + insertedText + outText.slice(absEnd);
+
+    // Shift caret if an edit happened before it.
+    if (i !== editedOccIdx && occ.start < editedOcc.start) {
+      newCaretStart += delta;
+      newCaretEnd += delta;
+    }
+  }
+
+  editor.value = outText;
+  editor.selectionStart = newCaretStart;
+  editor.selectionEnd = newCaretEnd;
+
+  // Keep the token active if it still looks like a valid variable,
+  // so the user can continue typing continuously.
+  const newName = oldText.slice(editedOcc.start, editedOcc.start + relStart) + insertedText + oldText.slice(editedOcc.start + relEnd, editedOcc.end);
+  if (/^[A-Za-z_][A-Za-z0-9_]*$/.test(newName)) {
+    activeToken = { type: 'var', name: newName.toLowerCase() };
+  } else {
+    activeToken = null;
+  }
 }
 
 interface LineShift {
@@ -562,7 +680,7 @@ function render() {
       display: ''
     }));
   }
-  overlay.innerHTML = highlightNote(editor.value, lastResults, settings.mode);
+  overlay.innerHTML = highlightNote(editor.value, lastResults, settings.mode, activeToken);
   syncScroll();
   layoutGutters();
   updateStatus();
@@ -626,7 +744,11 @@ function layoutGutters() {
   lineGutter.style.minWidth = Math.ceil(labelWidth + gutterPadX + 6) + 'px';
 
   lineGutter.innerHTML = heights
-    .map((h, i) => `<div class="row" style="height:${h}px">L${i + 1}</div>`)
+    .map((h, i) => {
+      const isHl = activeToken?.type === 'lref' && activeToken.line === i + 1;
+      const cls = isHl ? ' hl-lref' : '';
+      return `<div class="row${cls}" style="height:${h}px">L${i + 1}</div>`;
+    })
     .join('');
 
   // Build result column
@@ -653,6 +775,10 @@ function layoutGutters() {
           const tip = escapeAttr(r.errorTooltip ?? UNQUOTED_STRING_TOOLTIP);
           return `<div class="row error" style="height:${h}px" data-tooltip="${tip}">err</div>`;
         }
+        if (r.errorKind === 'duplicate-var') {
+          const tip = escapeAttr(r.errorTooltip ?? DUPLICATE_VAR_TOOLTIP);
+          return `<div class="row link-error" style="height:${h}px" data-tooltip="${tip}">Duplicate</div>`;
+        }
         // Other general errors (parse errors, etc.): render as blank in the
         // gutter. The line highlighter already shows a red underline/bg on
         // the offending line, so an additional "err" pill is just noise
@@ -663,11 +789,14 @@ function layoutGutters() {
       let cls = 'row';
       if (txt === '') cls = 'row empty';
       else if (r.stale) cls = 'row stale';
-      return `<div class="${cls}" style="height:${h}px">${escapeHtml(txt)}</div>`;
+      const copyable = txt !== '' && (r.numeric !== undefined || r.stringValue !== undefined);
+      const iconHtml = copyable ? COPY_ICON_HTML : '';
+      return `<div class="${cls}" style="height:${h}px">${escapeHtml(txt)}${iconHtml}</div>`;
     })
     .join('');
-  // Re-bind tooltip handlers (the rows just got recreated).
+  // Re-bind tooltip and click handlers (the rows just got recreated).
   bindResultTooltips();
+  bindResultClicks();
 }
 
 function updateStatus() {
@@ -693,9 +822,9 @@ function updateStatus() {
   }
 }
 
-// Returns true if the footer was overwritten with sum/avg of the selected
-// rows. Selection must span at least two lines and contain at least one
-// numeric result to count.
+// Returns true if the footer was overwritten with selection stats.
+// - Single-line selection: evaluates the selected sub-expression and shows "Ans: X".
+// - Multi-line selection: shows sum + avg of numeric results in the selected rows.
 function renderSelectionStats(): boolean {
   if (settings.mode !== 'math') return false;
   const start = editor.selectionStart;
@@ -704,7 +833,18 @@ function renderSelectionStats(): boolean {
   const text = editor.value;
   const startLine = text.slice(0, start).split('\n').length - 1;
   const endLine = text.slice(0, end).split('\n').length - 1;
-  if (startLine === endLine) return false;
+
+  if (startLine === endLine) {
+    // Single-line selection: evaluate the highlighted sub-expression.
+    const selectedText = text.slice(start, end).trim();
+    if (!selectedText) return false;
+    const val = evaluateSelectedText(selectedText, lastResults, startLine, settings.suffixes, settings.decimals);
+    if (val === undefined || !isFinite(val)) return false;
+    status.textContent = `Ans: ${formatResult(val, settings.decimals)}`;
+    status.className = 'status-msg ok';
+    return true;
+  }
+
   const values: number[] = [];
   for (let i = startLine; i <= endLine; i++) {
     const r = lastResults[i];
@@ -798,8 +938,8 @@ interface SlashCmd {
 
 interface MenuState {
   open: boolean;
-  /** 'slash' or 'lineref' */
-  kind: 'slash' | 'lineref' | null;
+  /** 'slash', 'lineref', or 'varcomp' */
+  kind: 'slash' | 'lineref' | 'varcomp' | null;
   /** Index of trigger character in editor.value at trigger time. */
   triggerStart: number;
   items: SlashCmd[];
@@ -832,6 +972,25 @@ function buildSlashCommands(): SlashCmd[] {
   ];
 }
 
+function buildVarCompCommands(): SlashCmd[] {
+  const out: SlashCmd[] = [];
+  const seen = new Set<string>();
+  for (const r of lastResults) {
+    if (!r.varName || seen.has(r.varName)) continue;
+    if (r.errorKind === 'reserved-x' || r.errorKind === 'reserved-excel'
+        || r.errorKind === 'reserved-name' || r.errorKind === 'duplicate-var') continue;
+    let hint = '';
+    if (r.stringValue !== undefined) {
+      hint = r.stringValue;
+    } else if (r.numeric !== undefined && isFinite(r.numeric)) {
+      hint = r.display ?? formatResult(r.numeric, settings.decimals);
+    }
+    out.push({ insert: r.varName, label: r.varName, hint });
+    seen.add(r.varName);
+  }
+  return out;
+}
+
 function buildLineRefCommands(): SlashCmd[] {
   const out: SlashCmd[] = [];
   for (const r of lastResults) {
@@ -859,7 +1018,9 @@ function clearNote() {
 }
 
 // Decide whether to open / update / close the menu based on the current caret.
-function updateMenuFromCaret() {
+// fromClick = true suppresses the varcomp trigger (clicking into the middle of a
+// word should highlight it, not open an autocomplete that would duplicate text).
+function updateMenuFromCaret(fromClick = false) {
   if (settings.mode !== 'math') {
     if (menuState.open) hideMenu();
     return;
@@ -869,6 +1030,8 @@ function updateMenuFromCaret() {
 
   // Already open: re-evaluate based on current caret.
   if (menuState.open) {
+    // A click while varcomp is open should close it — the user clicked somewhere.
+    if (fromClick && menuState.kind === 'varcomp') { hideMenu(); return; }
     const trigger = menuState.triggerStart;
     if (caret < trigger || caret > text.length) { hideMenu(); return; }
     const fragment = text.slice(trigger, caret);
@@ -882,6 +1045,12 @@ function updateMenuFromCaret() {
       // Must still start with L/l and only digits after.
       if (!/^L\d*$/i.test(fragment)) { hideMenu(); return; }
       filterAndRender(fragment);
+      return;
+    }
+    if (menuState.kind === 'varcomp') {
+      if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(fragment)) { hideMenu(); return; }
+      filterAndRender(fragment);
+      if (menuState.filtered.length === 0) { hideMenu(); }
       return;
     }
   }
@@ -907,14 +1076,35 @@ function updateMenuFromCaret() {
     const items = buildLineRefCommands();
     if (items.length === 0) return;
     openMenu('lineref', caret - 1);
+    return;
+  }
+
+  // Variable completion: only when actively typing (not on click).
+  if (!fromClick) {
+    let identStart = caret;
+    while (identStart > 0 && /[A-Za-z0-9_]/.test(text[identStart - 1])) identStart--;
+    // Must start with a letter/underscore (not a digit mid-number).
+    if (identStart < caret && /^[A-Za-z_]/.test(text[identStart])) {
+      const fragment = text.slice(identStart, caret);
+      const prefix = fragment.toLowerCase();
+      const allVars = buildVarCompCommands();
+      // Show only when at least one var starts with prefix AND isn't a single exact match.
+      const matches = allVars.filter(it => it.insert.startsWith(prefix));
+      const hasMore = matches.some(it => it.insert !== prefix);
+      if (hasMore) {
+        openMenu('varcomp', identStart);
+      }
+    }
   }
 }
 
-function openMenu(kind: 'slash' | 'lineref', triggerStart: number) {
+function openMenu(kind: 'slash' | 'lineref' | 'varcomp', triggerStart: number) {
   menuState.open = true;
   menuState.kind = kind;
   menuState.triggerStart = triggerStart;
-  menuState.items = kind === 'slash' ? buildSlashCommands() : buildLineRefCommands();
+  menuState.items = kind === 'slash' ? buildSlashCommands()
+                  : kind === 'lineref' ? buildLineRefCommands()
+                  : buildVarCompCommands();
   menuState.selectedIdx = 0;
   const fragment = editor.value.slice(triggerStart, editor.selectionStart);
   // Unhide BEFORE filterAndRender + positionMenu so the items have non-zero
@@ -945,14 +1135,18 @@ function filterAndRender(fragment: string) {
   if (menuState.kind === 'slash') {
     menuState.filtered = menuState.items.filter(it =>
       it.label.toLowerCase().startsWith(q));
-  } else {
-    // lineref: q is like "L" or "L1" or "l12"
+  } else if (menuState.kind === 'lineref') {
+    // q is like "L" or "L1" or "l12"
     if (q.length <= 1) {
       menuState.filtered = menuState.items.slice();
     } else {
       menuState.filtered = menuState.items.filter(it =>
         it.label.toLowerCase().startsWith(q));
     }
+  } else {
+    // varcomp: rebuild items so values stay fresh, then prefix-filter.
+    menuState.items = buildVarCompCommands();
+    menuState.filtered = menuState.items.filter(it => it.insert.startsWith(q));
   }
   if (menuState.filtered.length === 0) {
     cmdMenu.innerHTML = `<div class="cmd-empty">No matches</div>`;
@@ -1236,6 +1430,31 @@ function bindResultTooltips() {
   });
 }
 
+function bindResultClicks() {
+  // Select ALL rows (including empty) so index i aligns with lastResults[i].
+  resultGutter.querySelectorAll<HTMLDivElement>('.row').forEach((row, i) => {
+    if (row.classList.contains('empty')) return;
+    const r = lastResults[i];
+    if (!r || (r.numeric === undefined && r.stringValue === undefined)) return;
+    const val = r.stringValue ?? String(r.numeric);
+    const display = r.display ?? val;
+    row.style.cursor = 'pointer';
+    row.addEventListener('click', () => {
+      window.mathPopup.copyText(val);
+      flashStatus(`Copied ${display}`);
+      const iconEl = row.querySelector<HTMLSpanElement>('.copy-icon');
+      if (iconEl) {
+        iconEl.innerHTML = COPIED_ICON_HTML;
+        iconEl.classList.add('copied');
+        setTimeout(() => {
+          iconEl.innerHTML = `<svg class="copy-svg" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="0.75" width="7.25" height="7.25" rx="1.25"/><rect x="0.75" y="4" width="7.25" height="7.25" rx="1.25"/></svg>`;
+          iconEl.classList.remove('copied');
+        }, 1500);
+      }
+    });
+  });
+}
+
 let tooltipShowTimer: number | null = null;
 
 function showTooltipFor(row: HTMLDivElement) {
@@ -1410,7 +1629,7 @@ function buildVarsList(): { name: string; display: string; line: number }[] {
     // Skip rows that errored on a reserved name — those weren't real
     // assignments, just informative pills.
     if (r.errorKind === 'reserved-x' || r.errorKind === 'reserved-excel'
-        || r.errorKind === 'reserved-name') continue;
+        || r.errorKind === 'reserved-name' || r.errorKind === 'duplicate-var') continue;
     let display: string;
     if (r.stringValue !== undefined) {
       display = r.stringValue;
@@ -1434,11 +1653,17 @@ function renderVarsPopup() {
     return;
   }
   varsPopup.innerHTML = vars.map(v => `
-    <div class="vars-row">
+    <div class="vars-row" data-copy="${escapeAttr(v.display)}">
       <span class="vars-name">${escapeHtml(v.name)}<span class="vars-line">L${v.line}</span></span>
       <span class="vars-value">${escapeHtml(v.display)}</span>
     </div>
   `).join('');
+  varsPopup.querySelectorAll<HTMLDivElement>('.vars-row').forEach(row => {
+    row.addEventListener('click', () => {
+      const val = row.dataset.copy;
+      if (val) { window.mathPopup.copyText(val); flashStatus(`Copied ${val}`); }
+    });
+  });
 }
 
 function showVarsPopup() {
@@ -1480,6 +1705,48 @@ function cancelHideVarsPopup() {
 function hideVarsPopup() {
   cancelHideVarsPopup();
   varsPopup.hidden = true;
+}
+
+// ============================================================
+// Click-to-highlight token references
+// ============================================================
+
+function getTokenAtCaret(): ActiveToken | null {
+  const caret = editor.selectionStart;
+  if (caret !== editor.selectionEnd) return null;
+  const text = editor.value;
+  let start = caret;
+  while (start > 0 && /[A-Za-z0-9_]/.test(text[start - 1])) start--;
+  let end = caret;
+  while (end < text.length && /[A-Za-z0-9_]/.test(text[end])) end++;
+  if (start === end) return null;
+  const token = text.slice(start, end);
+  if (/^[Ll]\d+$/.test(token)) {
+    return { type: 'lref', line: parseInt(token.slice(1)) };
+  }
+  if (/^[A-Za-z_][A-Za-z0-9_]*$/.test(token)) {
+    return { type: 'var', name: token.toLowerCase() };
+  }
+  return null;
+}
+
+function tokenEquals(a: ActiveToken | null, b: ActiveToken | null): boolean {
+  if (a === null && b === null) return true;
+  if (a === null || b === null) return false;
+  if (a.type !== b.type) return false;
+  if (a.type === 'var' && b.type === 'var') return a.name === b.name;
+  if (a.type === 'lref' && b.type === 'lref') return a.line === b.line;
+  return false;
+}
+
+function updateActiveToken() {
+  if (settings.mode !== 'math') return;
+  const newToken = getTokenAtCaret();
+  if (tokenEquals(newToken, activeToken)) return;
+  activeToken = newToken;
+  // Lightweight re-render: just overlay + gutters, no re-evaluation needed.
+  overlay.innerHTML = highlightNote(editor.value, lastResults, settings.mode, activeToken);
+  layoutGutters();
 }
 
 document.addEventListener('selectionchange', () => {
