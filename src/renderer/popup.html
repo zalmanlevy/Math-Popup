@@ -9,9 +9,10 @@
 <body>
   <header class="title-bar">
     <div class="drag-handle"></div>
-    <div class="mode-toggle" role="tablist" aria-label="Mode">
-      <button id="mode-math" class="mode-btn active" data-mode="math" role="tab" aria-selected="true">Math</button>
-      <button id="mode-text" class="mode-btn" data-mode="text" role="tab" aria-selected="false">Text</button>
+    <div class="left-actions">
+      <button id="tabs-btn" class="icon-btn" title="Tabs (Ctrl+T for new)">📄</button>
+      <button id="archive-btn" class="icon-btn" title="Recently Closed">🕒</button>
+      <button id="mode-toggle-btn" class="icon-btn" title="Mode: Math">∑</button>
     </div>
     <div class="title-spacer"></div>
     <div class="actions">
@@ -21,6 +22,8 @@
       <button id="open-settings" title="Settings" class="icon-btn">⚙</button>
       <button id="close-window" title="Close" class="icon-btn close">×</button>
     </div>
+    <div id="tabs-popup" class="vars-popup" hidden></div>
+    <div id="archive-popup" class="vars-popup" hidden></div>
     <div id="vars-popup" class="vars-popup" hidden></div>
   </header>
   <main class="editor-shell">
@@ -43,7 +46,7 @@
   <div id="hover-tooltip" class="hover-tooltip" hidden></div>
   <footer class="status-bar">
     <span id="status-msg" class="status-msg">Ready</span>
-    <span class="hint">Ctrl+Shift+C copy result</span>
+    <span id="page-indicator" class="hint">Page 1</span>
   </footer>
   <script src="popup.js"></script>
 </body>

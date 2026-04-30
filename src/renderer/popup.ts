@@ -1,7 +1,7 @@
 import { evaluateNote, evaluateSelectedText, LineResult, EXCEL_FORMULA_TOOLTIP, X_RESERVED_TOOLTIP, UNQUOTED_STRING_TOOLTIP, RESERVED_NAME_TOOLTIP, DUPLICATE_VAR_TOOLTIP } from './evaluator';
 import { highlightNote, ActiveToken } from './highlighter';
 import { formatWithCommas, formatResult } from './formatter';
-import type { Mode, Settings, Suffix, ThemePref } from '../shared/types';
+import type { Mode, Page, Settings, Suffix, ThemePref } from '../shared/types';
 
 const editor = document.getElementById('editor') as HTMLTextAreaElement;
 const overlay = document.getElementById('syntax-overlay') as HTMLPreElement;
@@ -15,15 +15,22 @@ const pinBtn = document.getElementById('toggle-pin') as HTMLButtonElement;
 const helpBtn = document.getElementById('open-help') as HTMLButtonElement;
 const varsBtn = document.getElementById('show-vars') as HTMLButtonElement;
 const varsPopup = document.getElementById('vars-popup') as HTMLDivElement;
-const modeMathBtn = document.getElementById('mode-math') as HTMLButtonElement;
-const modeTextBtn = document.getElementById('mode-text') as HTMLButtonElement;
+const pageIndicator = document.getElementById('page-indicator') as HTMLSpanElement;
 const cmdMenu = document.getElementById('cmd-menu') as HTMLDivElement;
 const hoverTooltip = document.getElementById('hover-tooltip') as HTMLDivElement;
 
 let settings: Settings;
+let closedPages: Page[] = [];
+let pages: Page[] = [];
+let activePageId: string = '';
 let lastResults: LineResult[] = [];
 let saveTimer: number | null = null;
 let activeToken: ActiveToken | null = null;
+const tabsBtn = document.getElementById('tabs-btn') as HTMLButtonElement;
+const archiveBtn = document.getElementById('archive-btn') as HTMLButtonElement;
+const modeToggleBtn = document.getElementById('mode-toggle-btn') as HTMLButtonElement;
+const tabsPopup = document.getElementById('tabs-popup') as HTMLDivElement;
+const archivePopup = document.getElementById('archive-popup') as HTMLDivElement;
 
 const COPY_ICON_HTML = `<span class="copy-icon"><svg class="copy-svg" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="0.75" width="7.25" height="7.25" rx="1.25"/><rect x="0.75" y="4" width="7.25" height="7.25" rx="1.25"/></svg></span>`;
 const COPIED_ICON_HTML = `<svg class="copy-svg" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 6l3 3.5 5-7"/></svg>`;
@@ -34,16 +41,33 @@ let previousText = '';
 
 async function init() {
   settings = await window.mathPopup.getSettings();
-  editor.value = settings.noteContent ?? '';
+  pages = settings.pages || [];
+  closedPages = settings.closedPages || [];
+  activePageId = settings.activePageId || '';
+  if (pages.length === 0) {
+    const id = Date.now().toString();
+    pages.push({ id, title: 'Page 1', content: settings.noteContent ?? '', mode: settings.mode ?? 'math' });
+    activePageId = id;
+  }
+  const activePage = pages.find(p => p.id === activePageId) || pages[0];
+  activePageId = activePage.id;
+  
+  editor.value = activePage.content;
   previousText = editor.value;
   applyTheme(settings.theme);
-  applyMode(settings.mode);
+  applyMode(activePage.mode);
   applyAlwaysOnTop(settings.alwaysOnTop);
   bindEvents();
   // Re-render syntax overlay if the system theme flips while the app is open.
   window.mathPopup.onThemeChanged(() => render());
+  updatePageIndicator();
   render();
   editor.focus();
+}
+
+function updatePageIndicator() {
+  const activePage = pages.find(p => p.id === activePageId);
+  if (activePage) pageIndicator.textContent = activePage.title || 'Page';
 }
 
 function applyTheme(theme: ThemePref) {
@@ -69,8 +93,18 @@ function bindEvents() {
   pinBtn.addEventListener('click', toggleAlwaysOnTop);
   helpBtn.addEventListener('click', () => window.mathPopup.openHelp());
 
-  // Variables popup: appears on hover, stays while the cursor is over either
-  // the button or the popup itself.
+  // Dropdowns
+  tabsBtn.addEventListener('mouseenter', showTabsPopup);
+  tabsBtn.addEventListener('mouseleave', scheduleHideTabsPopup);
+  tabsPopup.addEventListener('mouseenter', cancelHideTabsPopup);
+  tabsPopup.addEventListener('mouseleave', scheduleHideTabsPopup);
+
+  archiveBtn.addEventListener('mouseenter', showArchivePopup);
+  archiveBtn.addEventListener('mouseleave', scheduleHideArchivePopup);
+  archivePopup.addEventListener('mouseenter', cancelHideArchivePopup);
+  archivePopup.addEventListener('mouseleave', scheduleHideArchivePopup);
+
+  // Variables popup
   varsBtn.addEventListener('mouseenter', showVarsPopup);
   varsBtn.addEventListener('mouseleave', scheduleHideVarsPopup);
   varsBtn.addEventListener('focus', showVarsPopup);
@@ -78,34 +112,49 @@ function bindEvents() {
   varsPopup.addEventListener('mouseenter', cancelHideVarsPopup);
   varsPopup.addEventListener('mouseleave', scheduleHideVarsPopup);
 
-  modeMathBtn.addEventListener('click', () => setMode('math'));
-  modeTextBtn.addEventListener('click', () => setMode('text'));
+  modeToggleBtn.addEventListener('click', () => {
+    const activePage = pages.find(p => p.id === activePageId);
+    if (activePage) setMode(activePage.mode === 'math' ? 'text' : 'math');
+  });
 
   // Listen for settings changes pushed via a polling refresh-on-focus.
   window.addEventListener('focus', async () => {
     settings = await window.mathPopup.getSettings();
+    pages = settings.pages || [];
+    if (!pages.find(p => p.id === activePageId) && pages.length > 0) {
+      activePageId = settings.activePageId || pages[0].id;
+      const activePage = pages.find(p => p.id === activePageId) || pages[0];
+      editor.value = activePage.content;
+      previousText = editor.value;
+      applyMode(activePage.mode);
+    }
     applyTheme(settings.theme);
-    applyMode(settings.mode);
     applyAlwaysOnTop(settings.alwaysOnTop);
     render();
   });
 }
 
 function setMode(mode: Mode) {
-  if (settings.mode === mode) return;
-  settings.mode = mode;
+  const activePage = pages.find(p => p.id === activePageId);
+  if (!activePage || activePage.mode === mode) return;
+  activePage.mode = mode;
   applyMode(mode);
-  window.mathPopup.setSettings({ mode });
+  window.mathPopup.setSettings({ pages, activePageId, closedPages });
   render();
   editor.focus();
 }
 
 function applyMode(mode: Mode) {
   document.body.classList.toggle('text-mode', mode === 'text');
-  modeMathBtn.classList.toggle('active', mode === 'math');
-  modeMathBtn.setAttribute('aria-selected', mode === 'math' ? 'true' : 'false');
-  modeTextBtn.classList.toggle('active', mode === 'text');
-  modeTextBtn.setAttribute('aria-selected', mode === 'text' ? 'true' : 'false');
+  modeToggleBtn.title = mode === 'math' ? 'Mode: Math' : 'Mode: Text';
+  modeToggleBtn.innerHTML = mode === 'math' ? '∑' : 'Aa';
+}
+
+// Per-tab mode lives on activePage.mode. settings.mode is a legacy/global
+// fallback that's no longer reliable (the focus handler reloads it from disk
+// and we never persist it on toggle), so always read the active page.
+function currentMode(): Mode {
+  return pages.find(p => p.id === activePageId)?.mode ?? settings?.mode ?? 'math';
 }
 
 function applyAlwaysOnTop(on: boolean) {
@@ -124,7 +173,7 @@ function toggleAlwaysOnTop() {
 function onInput() {
   const previousToken = activeToken;
   activeToken = null;
-  if (settings.mode === 'math') {
+  if (currentMode() === 'math') {
     maybeSyncRename(previousToken);
     maybeShiftLineRefs();
   }
@@ -185,10 +234,12 @@ function maybeSyncRename(previousToken: ActiveToken | null) {
 
   // 2. Find all occurrences of the variable in the old text.
   const occurrences: {start: number, end: number}[] = [];
-  const re = new RegExp(`\\b${previousToken.name}\\b`, 'gi');
+  const escapedName = previousToken.name.replace(/[.*+?^${}()|[\\]\\\\]/g, '\\$&');
+  const re = new RegExp(`(^|[^A-Za-z0-9_])${escapedName}(?![A-Za-z0-9_])`, 'gi');
   let m;
   while ((m = re.exec(oldText)) !== null) {
-    occurrences.push({ start: m.index, end: m.index + m[0].length });
+    const matchStart = m.index + m[1].length;
+    occurrences.push({ start: matchStart, end: matchStart + previousToken.name.length });
   }
 
   if (occurrences.length <= 1) return;
@@ -208,7 +259,7 @@ function maybeSyncRename(previousToken: ActiveToken | null) {
 
   const lineStart = oldText.lastIndexOf('\n', editedOcc.start - 1) + 1;
   const textBeforeOccOnLine = oldText.slice(lineStart, editedOcc.start);
-  const isFirstOnLine = !new RegExp(`\\b${previousToken.name}\\b`, 'i').test(textBeforeOccOnLine);
+  const isFirstOnLine = !new RegExp(`(^|[^A-Za-z0-9_])${previousToken.name.replace(/[.*+?^${}()|[\\]\\\\]/g, '\\\\$&')}(?![A-Za-z0-9_])`, 'i').test(textBeforeOccOnLine);
   if (!isFirstOnLine) {
     return; // We are editing a reference that happens to be on the same line as the definition.
   }
@@ -234,7 +285,7 @@ function maybeSyncRename(previousToken: ActiveToken | null) {
       if (isBaseLine) {
         const occLineStart = oldText.lastIndexOf('\n', occ.start - 1) + 1;
         const occTextBefore = oldText.slice(occLineStart, occ.start);
-        const occIsFirst = !new RegExp(`\\b${previousToken.name}\\b`, 'i').test(occTextBefore);
+        const occIsFirst = !new RegExp(`(^|[^A-Za-z0-9_])${escapedName}(?![A-Za-z0-9_])`, 'i').test(occTextBefore);
         if (occIsFirst) {
           continue; // Skip applying edit to this other base definition
         }
@@ -278,27 +329,40 @@ interface LineShift {
 }
 
 function computeLineShift(oldLines: string[], newLines: string[]): LineShift | null {
-  const oldLen = oldLines.length;
-  const newLen = newLines.length;
-  const minLen = Math.min(oldLen, newLen);
+  const oldText = oldLines.join('\\n');
+  const newText = newLines.join('\\n');
+  const minLen = Math.min(oldText.length, newText.length);
+  
   let prefix = 0;
-  while (prefix < minLen && oldLines[prefix] === newLines[prefix]) prefix++;
+  while (prefix < minLen && oldText[prefix] === newText[prefix]) prefix++;
+  
   let suffix = 0;
-  while (suffix < minLen - prefix &&
-         oldLines[oldLen - 1 - suffix] === newLines[newLen - 1 - suffix]) {
+  while (suffix < minLen - prefix && 
+         oldText[oldText.length - 1 - suffix] === newText[newText.length - 1 - suffix]) {
     suffix++;
   }
+
+  const oldPrefixLines = (oldText.slice(0, prefix).match(/\\n/g) || []).length;
+  const newPrefixLines = (newText.slice(0, prefix).match(/\\n/g) || []).length;
+  const oldSuffixLines = (oldText.slice(oldText.length - suffix).match(/\\n/g) || []).length;
+  const newSuffixLines = (newText.slice(newText.length - suffix).match(/\\n/g) || []).length;
+
+  const oldLen = oldLines.length;
+  const newLen = newLines.length;
+  
   const map = new Map<number, number>();
   let anyShift = false;
-  for (let i = 0; i < prefix; i++) map.set(i, i);
-  for (let i = 0; i < suffix; i++) {
+  
+  for (let i = 0; i < oldPrefixLines; i++) map.set(i, i);
+  for (let i = 0; i <= oldSuffixLines && i < oldLen; i++) {
     const oldIdx = oldLen - 1 - i;
     const newIdx = newLen - 1 - i;
     map.set(oldIdx, newIdx);
     if (oldIdx !== newIdx) anyShift = true;
   }
+  
   if (!anyShift) return null;
-  return { map, shiftedPrefixEnd: prefix, shiftedSuffixStart: newLen - suffix };
+  return { map, shiftedPrefixEnd: oldPrefixLines, shiftedSuffixStart: newLen - oldSuffixLines };
 }
 
 function rewriteLineRefs(
@@ -392,15 +456,12 @@ function adjustCaret(
 function ensureCaretLineVisible() {
   if (editor.selectionStart !== editor.selectionEnd) return;
   const caret = editor.selectionStart;
-  const text = editor.value;
-  const lineIndex = (text.slice(0, caret).match(/\n/g) || []).length;
 
   const editorStyle = getComputedStyle(editor);
-  const padTop = parseFloat(editorStyle.paddingTop) || 0;
   const lineHeight = parseFloat(editorStyle.lineHeight) || 22;
 
-  // Approximate line position (no wrap). Sufficient for short note lines.
-  const lineTop = padTop + lineIndex * lineHeight;
+  const coords = caretCoords(caret);
+  const lineTop = coords.top;
   const lineBot = lineTop + lineHeight;
 
   const viewTop = editor.scrollTop;
@@ -416,11 +477,264 @@ function ensureCaretLineVisible() {
 function scheduleSave() {
   if (saveTimer) window.clearTimeout(saveTimer);
   saveTimer = window.setTimeout(() => {
-    window.mathPopup.setSettings({ noteContent: editor.value });
+    const activePage = pages.find(p => p.id === activePageId);
+    if (activePage) activePage.content = editor.value;
+    window.mathPopup.setSettings({ pages, activePageId });
   }, 250);
 }
 
+let tabsHoverTimer: number | null = null;
+let archiveHoverTimer: number | null = null;
+
+function showTabsPopup() {
+  if (tabsHoverTimer) window.clearTimeout(tabsHoverTimer);
+  renderTabsMenu();
+  tabsPopup.hidden = false;
+  const rect = tabsBtn.getBoundingClientRect();
+  tabsPopup.style.top = `${rect.bottom + 4}px`;
+  tabsPopup.style.left = `${rect.left}px`;
+}
+function scheduleHideTabsPopup() { tabsHoverTimer = window.setTimeout(hideTabsPopup, 150); }
+function cancelHideTabsPopup() { if (tabsHoverTimer) window.clearTimeout(tabsHoverTimer); }
+function hideTabsPopup() { tabsPopup.hidden = true; }
+
+function showArchivePopup() {
+  if (archiveHoverTimer) window.clearTimeout(archiveHoverTimer);
+  renderArchiveMenu();
+  archivePopup.hidden = false;
+  const rect = archiveBtn.getBoundingClientRect();
+  archivePopup.style.top = `${rect.bottom + 4}px`;
+  archivePopup.style.left = `${rect.left}px`;
+}
+function scheduleHideArchivePopup() { archiveHoverTimer = window.setTimeout(hideArchivePopup, 150); }
+function cancelHideArchivePopup() { if (archiveHoverTimer) window.clearTimeout(archiveHoverTimer); }
+function hideArchivePopup() { archivePopup.hidden = true; }
+
+function renderTabsMenu() {
+  tabsPopup.innerHTML = '';
+  pages.forEach((page, index) => {
+    const row = document.createElement('div');
+    row.className = 'vars-row' + (page.id === activePageId ? ' active' : '');
+    row.style.cursor = 'pointer';
+    row.onclick = (e) => {
+      // Don't trigger if clicking inside the input
+      if ((e.target as HTMLElement).tagName === 'INPUT') return;
+      switchTab(page.id); 
+      hideTabsPopup(); 
+    };
+    
+    const titleSpan = document.createElement('span');
+    titleSpan.className = 'vars-name';
+    titleSpan.textContent = page.title || `Page ${index + 1}`;
+    
+    const controls = document.createElement('div');
+    controls.style.display = 'flex';
+    controls.style.gap = '4px';
+    
+    const editBtn = document.createElement('span');
+    editBtn.className = 'vars-val';
+    editBtn.textContent = '✏️';
+    editBtn.style.cursor = 'pointer';
+    editBtn.onclick = (e) => {
+      e.stopPropagation();
+      const input = document.createElement('input');
+      input.type = 'text';
+      input.className = 'tab-rename-input';
+      input.maxLength = 15;
+      input.value = page.title;
+      
+      const saveName = () => {
+        const val = input.value.trim();
+        if (val) {
+          page.title = val;
+          window.mathPopup.setSettings({ pages, activePageId, closedPages });
+          updatePageIndicator();
+        }
+        renderTabsMenu();
+      };
+      
+      input.onkeydown = (e2) => {
+        if (e2.key === 'Enter') {
+          e2.preventDefault();
+          saveName();
+        }
+      };
+      input.onblur = saveName;
+      
+      row.replaceChild(input, titleSpan);
+      input.focus();
+    };
+
+    const closeBtn = document.createElement('span');
+    closeBtn.className = 'vars-val';
+    closeBtn.textContent = '×';
+    closeBtn.style.cursor = 'pointer';
+    closeBtn.onclick = (e) => {
+      e.stopPropagation();
+      closeTab(page.id);
+      renderTabsMenu();
+    };
+    
+    controls.appendChild(editBtn);
+    controls.appendChild(closeBtn);
+    row.appendChild(titleSpan);
+    row.appendChild(controls);
+    tabsPopup.appendChild(row);
+  });
+  
+  if (pages.length < 99) {
+    const footer = document.createElement('div');
+    footer.className = 'popup-footer';
+    const addBtn = document.createElement('button');
+    addBtn.className = 'popup-btn';
+    addBtn.textContent = '+ New Tab';
+    addBtn.onclick = () => { addTab(); hideTabsPopup(); };
+    footer.appendChild(addBtn);
+    tabsPopup.appendChild(footer);
+  }
+}
+
+function renderArchiveMenu() {
+  archivePopup.innerHTML = '';
+  if (closedPages.length === 0) {
+    archivePopup.innerHTML = `<div class="vars-empty">No closed tabs</div>`;
+    return;
+  }
+  closedPages.forEach((page, index) => {
+    const row = document.createElement('div');
+    row.className = 'vars-row';
+    row.style.cursor = 'pointer';
+    row.onclick = () => { restoreTab(index); hideArchivePopup(); };
+    
+    const titleSpan = document.createElement('span');
+    titleSpan.className = 'vars-name';
+    titleSpan.textContent = page.title || 'Tab';
+    
+    const restoreBtn = document.createElement('span');
+    restoreBtn.className = 'vars-val';
+    restoreBtn.textContent = '↺';
+    
+    row.appendChild(titleSpan);
+    row.appendChild(restoreBtn);
+    archivePopup.appendChild(row);
+  });
+}
+
+function switchTab(id: string) {
+  if (id === activePageId) return;
+  const current = pages.find(p => p.id === activePageId);
+  if (current) current.content = editor.value;
+  
+  activePageId = id;
+  const next = pages.find(p => p.id === activePageId)!;
+  editor.value = next.content;
+  previousText = editor.value;
+  
+  applyMode(next.mode);
+  window.mathPopup.setSettings({ pages, activePageId, closedPages });
+  
+  updatePageIndicator();
+  render();
+  editor.focus();
+}
+
+function addTab() {
+  if (pages.length >= 99) return;
+  const current = pages.find(p => p.id === activePageId);
+  if (current) current.content = editor.value;
+  
+  const id = Date.now().toString();
+  const title = `Page ${pages.length + 1}`;
+  pages.push({ id, title, content: '', mode: 'math' });
+  activePageId = id;
+  
+  editor.value = '';
+  previousText = '';
+  applyMode('math');
+  window.mathPopup.setSettings({ pages, activePageId, closedPages });
+  
+  updatePageIndicator();
+  render();
+  editor.focus();
+}
+
+function closeTab(id: string) {
+  const index = pages.findIndex(p => p.id === id);
+  if (index === -1) return;
+  
+  const current = pages[index];
+  if (id === activePageId) current.content = editor.value;
+  closedPages.unshift(current);
+  if (closedPages.length > 10) closedPages.pop();
+  
+  pages.splice(index, 1);
+  if (pages.length === 0) {
+    const newId = Date.now().toString();
+    pages.push({ id: newId, title: 'Page 1', content: '', mode: 'math' });
+    activePageId = newId;
+  } else if (id === activePageId) {
+    const nextIndex = Math.min(index, pages.length - 1);
+    activePageId = pages[nextIndex].id;
+  }
+  
+  const next = pages.find(p => p.id === activePageId)!;
+  editor.value = next.content;
+  previousText = editor.value;
+  
+  applyMode(next.mode);
+  window.mathPopup.setSettings({ pages, activePageId, closedPages });
+  
+  updatePageIndicator();
+  render();
+  editor.focus();
+}
+
+function restoreTab(closedIndex: number) {
+  const page = closedPages.splice(closedIndex, 1)[0];
+  const current = pages.find(p => p.id === activePageId);
+  if (current) current.content = editor.value;
+  
+  pages.push(page);
+  activePageId = page.id;
+  
+  editor.value = page.content;
+  previousText = editor.value;
+  
+  applyMode(page.mode);
+  window.mathPopup.setSettings({ pages, activePageId, closedPages });
+  
+  updatePageIndicator();
+  render();
+  editor.focus();
+}
+
 function onKeyDown(e: KeyboardEvent) {
+  // Ctrl+T (new tab) and Ctrl+W (close tab)
+  if (e.ctrlKey && !e.altKey && !e.metaKey && !e.shiftKey) {
+    if (e.key === 't' || e.key === 'T') {
+      e.preventDefault();
+      addTab();
+      return;
+    }
+    if (e.key === 'w' || e.key === 'W') {
+      e.preventDefault();
+      closeTab(activePageId);
+      return;
+    }
+  }
+
+  // Ctrl+Tab (next tab) and Ctrl+Shift+Tab (prev tab)
+  if (e.ctrlKey && !e.altKey && !e.metaKey && (e.key === 'Tab' || e.code === 'Tab')) {
+    e.preventDefault();
+    if (pages.length <= 1) return;
+    const currentIndex = pages.findIndex(p => p.id === activePageId);
+    let nextIndex = e.shiftKey ? currentIndex - 1 : currentIndex + 1;
+    if (nextIndex < 0) nextIndex = pages.length - 1;
+    if (nextIndex >= pages.length) nextIndex = 0;
+    switchTab(pages[nextIndex].id);
+    return;
+  }
+
   // Ctrl+Z / Ctrl+Shift+Z (or Ctrl+Y) undo/redo. We override the textarea's
   // native undo entirely because programmatic edits (smart-tab, auto-format,
   // line-ref shifting, menu inserts) wipe the native history.
@@ -443,7 +757,7 @@ function onKeyDown(e: KeyboardEvent) {
   // Smart Tab: when the caret sits inside a number, jump past the number to
   // the trailing space (inserting one if missing) and re-run auto-format so
   // any commas are corrected. Math mode only.
-  if (settings.mode === 'math' && e.key === 'Tab' &&
+  if (currentMode() === 'math' && e.key === 'Tab' &&
       !e.ctrlKey && !e.shiftKey && !e.altKey && !e.metaKey) {
     e.preventDefault();
     handleSmartTab();
@@ -451,12 +765,12 @@ function onKeyDown(e: KeyboardEvent) {
   }
 
   // Auto-format / suffix-expansion triggers: space, operators, Enter, comma
-  if (settings.mode === 'math' && shouldAutoFormatOnKey(e)) {
+  if (currentMode() === 'math' && shouldAutoFormatOnKey(e)) {
     queueMicrotask(() => maybeAutoFormat(e.key));
   }
 
   // Ctrl+Shift+C: copy current line's result (math mode only)
-  if (settings.mode === 'math' && e.ctrlKey && e.shiftKey && (e.key === 'C' || e.key === 'c')) {
+  if (currentMode() === 'math' && e.ctrlKey && e.shiftKey && (e.key === 'C' || e.key === 'c')) {
     e.preventDefault();
     copyCurrentLineResult();
   }
@@ -667,7 +981,8 @@ function formatNumberForEditor(n: number, useCommas: boolean): string {
 
 // ---- render pipeline ----
 function render() {
-  if (settings.mode === 'math') {
+  const mode = currentMode();
+  if (mode === 'math') {
     // Pass the previous render's results so the evaluator can carry over
     // last-good values for lines that are temporarily mid-edit.
     lastResults = evaluateNote(editor.value, settings.suffixes, lastResults, settings.decimals);
@@ -680,7 +995,7 @@ function render() {
       display: ''
     }));
   }
-  overlay.innerHTML = highlightNote(editor.value, lastResults, settings.mode, activeToken);
+  overlay.innerHTML = highlightNote(editor.value, lastResults, mode, activeToken);
   syncScroll();
   layoutGutters();
   updateStatus();
@@ -800,7 +1115,7 @@ function layoutGutters() {
 }
 
 function updateStatus() {
-  if (settings.mode === 'text') {
+  if (currentMode() === 'text') {
     status.textContent = 'Text mode';
     status.className = 'status-msg';
     return;
@@ -826,7 +1141,7 @@ function updateStatus() {
 // - Single-line selection: evaluates the selected sub-expression and shows "Ans: X".
 // - Multi-line selection: shows sum + avg of numeric results in the selected rows.
 function renderSelectionStats(): boolean {
-  if (settings.mode !== 'math') return false;
+  if (currentMode() !== 'math') return false;
   const start = editor.selectionStart;
   const end = editor.selectionEnd;
   if (start === end) return false;
@@ -1021,7 +1336,7 @@ function clearNote() {
 // fromClick = true suppresses the varcomp trigger (clicking into the middle of a
 // word should highlight it, not open an autocomplete that would duplicate text).
 function updateMenuFromCaret(fromClick = false) {
-  if (settings.mode !== 'math') {
+  if (currentMode() !== 'math') {
     if (menuState.open) hideMenu();
     return;
   }
@@ -1185,7 +1500,7 @@ function applyMenuMaxHeight(): number {
   const itemH = sample ? sample.offsetHeight : 28;
   const padding = 8; // approx top+bottom padding of the menu
   const max = itemH * 5 + padding;
-  cmdMenu.style.maxHeight = max + 'px';
+  cmdMenu.style.maxHeight = `min(${max}px, calc(100vh - 48px))`;
   return max;
 }
 
@@ -1509,6 +1824,7 @@ interface FunctionSig {
 const FUNCTION_SIGNATURES: Record<string, FunctionSig> = {
   sum:     { name: 'SUM',     args: ['value1', '[value2]', '...'], desc: 'Adds all the numbers or line ranges together.' },
   average: { name: 'AVERAGE', args: ['value1', '[value2]', '...'], desc: 'Returns the average (arithmetic mean) of the arguments.' },
+  avg:     { name: 'AVG',     args: ['value1', '[value2]', '...'], desc: 'Returns the average (same as AVERAGE).' },
   mean:    { name: 'MEAN',    args: ['value1', '[value2]', '...'], desc: 'Returns the average (same as AVERAGE).' },
   max:     { name: 'MAX',     args: ['value1', '[value2]', '...'], desc: 'Returns the largest value in a set of values.' },
   min:     { name: 'MIN',     args: ['value1', '[value2]', '...'], desc: 'Returns the smallest value in a set of values.' },
@@ -1563,7 +1879,7 @@ function detectActiveSignature(): { sigKey: string; argIndex: number } | null {
 
 function updateSignatureTooltip() {
   // The slash / L menu always wins for screen real estate near the caret.
-  if (menuState.open || settings.mode !== 'math') {
+  if (menuState.open || currentMode() !== 'math') {
     signatureTooltip.hidden = true;
     return;
   }
@@ -1740,12 +2056,12 @@ function tokenEquals(a: ActiveToken | null, b: ActiveToken | null): boolean {
 }
 
 function updateActiveToken() {
-  if (settings.mode !== 'math') return;
+  if (currentMode() !== 'math') return;
   const newToken = getTokenAtCaret();
   if (tokenEquals(newToken, activeToken)) return;
   activeToken = newToken;
   // Lightweight re-render: just overlay + gutters, no re-evaluation needed.
-  overlay.innerHTML = highlightNote(editor.value, lastResults, settings.mode, activeToken);
+  overlay.innerHTML = highlightNote(editor.value, lastResults, currentMode(), activeToken);
   layoutGutters();
 }
 

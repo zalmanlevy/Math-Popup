@@ -10,6 +10,22 @@ function filePath(): string {
   return join(app.getPath('userData'), 'settings.json');
 }
 
+function migrateSettings(settings: Settings): Settings {
+  if (!settings.pages || settings.pages.length === 0) {
+    settings.pages = [{
+      id: Date.now().toString(),
+      title: 'Page 1',
+      content: settings.noteContent || '',
+      mode: settings.mode || 'math'
+    }];
+    settings.activePageId = settings.pages[0].id;
+  }
+  if (!settings.closedPages) {
+    settings.closedPages = [];
+  }
+  return settings;
+}
+
 export function loadSettings(): Settings {
   if (cache) return cache;
   const path = filePath();
@@ -21,14 +37,14 @@ export function loadSettings(): Settings {
       if (!Array.isArray(cache!.suffixes) || cache!.suffixes.length === 0) {
         cache!.suffixes = DEFAULT_SETTINGS.suffixes;
       }
-      return cache!;
+      return migrateSettings(cache!);
     } catch {
       cache = { ...DEFAULT_SETTINGS };
-      return cache;
+      return migrateSettings(cache);
     }
   }
   cache = { ...DEFAULT_SETTINGS };
-  return cache;
+  return migrateSettings(cache);
 }
 
 export function saveSettings(next: Partial<Settings>): Settings {

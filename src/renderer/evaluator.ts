@@ -11,8 +11,8 @@
 //   - PEMDAS via mathjs
 //   - x as a multiplication operator
 //   - money symbols ($€£¥...) ignored when evaluating
-//   - Excel-style aggregate functions (SUM, AVERAGE, MEAN, MAX, MIN, COUNT,
-//     MEDIAN, ROUND, CEIL, FLOOR, ABS, IF, TODAY, NOW, SQRT)
+//   - Excel-style aggregate functions (SUM, AVERAGE/AVG, MEAN, MAX, MIN,
+//     COUNT, MEDIAN, ROUND, CEIL, FLOOR, ABS, IF, TODAY, NOW, SQRT)
 
 import { create, all, type MathJsInstance } from 'mathjs';
 import { Suffix } from '../shared/types';
@@ -52,6 +52,11 @@ math.import({
     return nums.reduce((a, b) => a + b, 0) / nums.length;
   },
   mean: (...args: unknown[]) => {
+    const nums = flattenNumbers(args);
+    if (nums.length === 0) return NaN;
+    return nums.reduce((a, b) => a + b, 0) / nums.length;
+  },
+  avg: (...args: unknown[]) => {
     const nums = flattenNumbers(args);
     if (nums.length === 0) return NaN;
     return nums.reduce((a, b) => a + b, 0) / nums.length;
@@ -118,13 +123,13 @@ export const CURRENCY_RE = new RegExp(`[${CURRENCY_SYMBOLS}]`, 'g');
 //   - the `x` rule from `x` is handled separately
 //   - must be followed by `(` to be recognised as a call (matches Excel)
 export const EXCEL_FUNCTIONS = [
-  'SUM', 'AVERAGE', 'MEAN', 'MAX', 'MIN', 'COUNT', 'MEDIAN',
+  'SUM', 'AVERAGE', 'AVG', 'MEAN', 'MAX', 'MIN', 'COUNT', 'MEDIAN',
   'ROUND', 'CEIL', 'FLOOR', 'ABS', 'IF', 'TODAY', 'NOW', 'SQRT'
 ] as const;
 const EXCEL_FUNCTION_SET = new Set(EXCEL_FUNCTIONS.map(s => s.toLowerCase()));
 export const EXCEL_FORMULA_TOOLTIP =
   'This name is reserved as an Excel-style formula and cannot be used as a variable. ' +
-  'Available formulas: SUM, AVERAGE, MEAN, MAX, MIN, COUNT, MEDIAN, ROUND, CEIL, FLOOR, ' +
+  'Available formulas: SUM, AVERAGE, AVG, MEAN, MAX, MIN, COUNT, MEDIAN, ROUND, CEIL, FLOOR, ' +
   'ABS, IF, TODAY, NOW, SQRT. Use them like Excel: e.g. SUM(L1:L4) or ROUND(L1, 2).';
 export const X_RESERVED_TOOLTIP =
   'The letter "x" is reserved as a multiplication operator (like "*"), so it cannot be used as a variable.';
@@ -243,7 +248,8 @@ function evaluateOnePass(
           stringValue: prev.stringValue,
           display: prev.display,
           error: undefined,
-          stale: true
+          stale: true,
+          varName: prev.varName
         };
       }
     }
@@ -503,7 +509,7 @@ function computeExpression(
 
     // 4b. Normalise Excel function names to lower-case so user input like
     //     SUM(...) reaches mathjs as sum(...). Only when followed by `(`.
-    s = s.replace(/\b([A-Za-z_][A-Za-z0-9_]*)\s*(?=\()/g, (m, name: string) => {
+    s = s.replace(/(^|[^A-Za-z0-9_])([A-Za-z_][A-Za-z0-9_]*)\s*(?=\()/g, (m, lead: string, name: string) => {
       return isExcelFunctionName(name) ? m.replace(name, name.toLowerCase()) : m;
     });
 

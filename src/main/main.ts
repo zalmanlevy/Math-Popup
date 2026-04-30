@@ -60,7 +60,7 @@ function createPopup() {
     height: bounds.height,
     x: bounds.x,
     y: bounds.y,
-    minWidth: 220,
+    minWidth: 280,
     minHeight: 200,
     frame: false,
     transparent: false,

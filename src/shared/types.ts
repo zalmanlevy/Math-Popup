@@ -7,6 +7,13 @@ export interface Suffix {
 export type Mode = 'math' | 'text';
 export type ThemePref = 'system' | 'light' | 'dark';
 
+export interface Page {
+  id: string;
+  title: string;
+  content: string;
+  mode: Mode;
+}
+
 export interface Settings {
   mode: Mode;                     // 'math' = full evaluator + gutters; 'text' = plain notepad
   launchAtStartup: boolean;       // start with Windows; opens hidden in the tray
@@ -17,7 +24,9 @@ export interface Settings {
   noteContent: string;            // last saved note text
   alwaysOnTop: boolean;           // pin window above other apps
   theme: ThemePref;               // 'system' follows OS, otherwise forced
-  windowBounds?: { x: number; y: number; width: number; height: number };
+  pages?: Page[];
+  activePageId?: string;
+  closedPages?: Page[];
 }
 
 export const DEFAULT_SETTINGS: Settings = {
