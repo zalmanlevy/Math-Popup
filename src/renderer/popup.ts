@@ -1,4 +1,4 @@
-import { evaluateNote, evaluateSelectedText, LineResult, EXCEL_FORMULA_TOOLTIP, X_RESERVED_TOOLTIP, UNQUOTED_STRING_TOOLTIP, RESERVED_NAME_TOOLTIP, DUPLICATE_VAR_TOOLTIP } from './evaluator';
+import { evaluateNote, evaluateSelectedText, LineResult, EXCEL_FORMULA_TOOLTIP, X_RESERVED_TOOLTIP, UNQUOTED_STRING_TOOLTIP, RESERVED_NAME_TOOLTIP, DUPLICATE_VAR_TOOLTIP, isExcelFunctionName } from './evaluator';
 import { highlightNote, ActiveToken } from './highlighter';
 import { formatWithCommas, formatResult } from './formatter';
 import type { Mode, Page, Settings, Suffix, ThemePref } from '../shared/types';
@@ -20,6 +20,13 @@ const pageIndicator = document.getElementById('page-indicator') as HTMLSpanEleme
 const zoomIndicator = document.getElementById('zoom-indicator') as HTMLSpanElement;
 const cmdMenu = document.getElementById('cmd-menu') as HTMLDivElement;
 const hoverTooltip = document.getElementById('hover-tooltip') as HTMLDivElement;
+const findLayer = document.getElementById('find-layer') as HTMLPreElement;
+const findBar = document.getElementById('find-bar') as HTMLDivElement;
+const findInput = document.getElementById('find-input') as HTMLInputElement;
+const findCount = document.getElementById('find-count') as HTMLSpanElement;
+const findPrevBtn = document.getElementById('find-prev') as HTMLButtonElement;
+const findNextBtn = document.getElementById('find-next') as HTMLButtonElement;
+const findCloseBtn = document.getElementById('find-close') as HTMLButtonElement;
 
 let settings: Settings;
 let closedPages: Page[] = [];
@@ -162,6 +169,41 @@ function bindEvents() {
     hideSignatureTooltip();
   });
   editor.addEventListener('click', () => { updateMenuFromCaret(true); updateActiveToken(); });
+  // Line-number gutter: click a number to drop its L-ref at the caret. Using
+  // mousedown + preventDefault keeps the textarea focused and its caret intact
+  // (the standard "toolbar button inserts into a focused field" trick), so the
+  // ref lands exactly where the user was typing.
+  lineGutter.addEventListener('mousedown', (e) => {
+    const row = (e.target as HTMLElement).closest<HTMLElement>('.row[data-line]');
+    if (!row) return;
+    e.preventDefault();
+    const n = parseInt(row.dataset.line || '', 10);
+    if (Number.isFinite(n)) insertLineRefAtCaret(n);
+  });
+
+  // Find (Ctrl/Cmd+F). Window-level so it opens whatever currently has focus;
+  // F3 / Shift+F3 cycle matches. Escape is handled by the capture-phase Escape
+  // listener above (find takes priority over closing the window).
+  window.addEventListener('keydown', (e) => {
+    if ((e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey && (e.key === 'f' || e.key === 'F')) {
+      e.preventDefault();
+      // Toggle: if you're already typing in the find box, close it; otherwise
+      // open it (or pull focus back into it) and select the text.
+      if (findActive && document.activeElement === findInput) closeFind();
+      else openFind();
+    } else if (e.key === 'F3') {
+      e.preventDefault();
+      if (findActive) findNext(e.shiftKey ? -1 : 1); else openFind();
+    }
+  });
+  findInput.addEventListener('input', () => { autosizeFindInput(); runFind(findInput.value); });
+  findInput.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') { e.preventDefault(); findNext(e.shiftKey ? -1 : 1); }
+  });
+  findPrevBtn.addEventListener('click', () => { findNext(-1); findInput.focus(); });
+  findNextBtn.addEventListener('click', () => { findNext(1); findInput.focus(); });
+  findCloseBtn.addEventListener('click', () => closeFind());
+
   window.addEventListener('resize', () => render());
 
   closeBtn.addEventListener('click', () => window.mathPopup.hidePopup());
@@ -223,7 +265,8 @@ function bindEvents() {
   document.addEventListener('keydown', (e) => {
     if (e.key !== 'Escape') return;
     let handled = true;
-    if (!contextMenu.hidden) hideTabContextMenu();
+    if (findActive) closeFind();
+    else if (!contextMenu.hidden) hideTabContextMenu();
     else if (reorderMode) exitReorderMode(false);
     else if (!overflowPopup.hidden) hideOverflowPopup();
     else handled = false;
@@ -1501,6 +1544,7 @@ function render() {
   syncScroll();
   layoutGutters();
   updateStatus();
+  if (findActive) refreshFindAfterEdit();
 }
 
 function syncScroll() {
@@ -1509,6 +1553,10 @@ function syncScroll() {
   // Keep gutters in vertical sync with the editor's scroll.
   lineGutter.scrollTop = editor.scrollTop;
   resultGutter.scrollTop = editor.scrollTop;
+  if (findActive) {
+    findLayer.scrollTop = editor.scrollTop;
+    findLayer.scrollLeft = editor.scrollLeft;
+  }
 }
 
 function layoutGutters() {
@@ -1564,7 +1612,7 @@ function layoutGutters() {
     .map((h, i) => {
       const isHl = activeToken?.type === 'lref' && activeToken.line === i + 1;
       const cls = isHl ? ' hl-lref' : '';
-      return `<div class="row${cls}" style="height:${h}px">L${i + 1}</div>`;
+      return `<div class="row${cls}" style="height:${h}px" data-line="${i + 1}" title="Click to insert L${i + 1}">L${i + 1}</div>`;
     })
     .join('');
 
@@ -2139,6 +2187,257 @@ function insertAtTrigger(text: string) {
   previousText = editor.value;
   scheduleSave();
   render();
+}
+
+// Insert a line reference (L<n>) at the caret — invoked by clicking a line
+// number in the gutter. Inside an Excel function call, successive refs are
+// auto-separated with a comma so clicking rows builds `SUM(L1, L2, L3)`.
+// Anywhere else we drop the bare ref at the caret and let the user supply the
+// operators (`5 + ` then click L4 -> `5 + L4`).
+function insertLineRefAtCaret(line: number) {
+  let start = editor.selectionStart;
+  let end = editor.selectionEnd;
+  const value = editor.value;
+
+  // If the caret sits right after an empty Excel call — `SUM()|` — hop inside
+  // the parentheses so the ref lands where the first argument belongs.
+  if (start === end) {
+    const m = /([A-Za-z_][A-Za-z0-9_]*)\(\)$/.exec(value.slice(0, start));
+    if (m && isExcelFunctionName(m[1])) { start -= 1; end -= 1; }
+  }
+
+  const before = value.slice(0, start);
+  const sep = needsExcelComma(before) ? ', ' : '';
+  const insert = `${sep}L${line}`;
+  const newValue = before + insert + value.slice(end);
+  if (newValue === value) return;
+
+  captureForUndo();
+  editor.value = newValue;
+  const caret = start + insert.length;
+  editor.selectionStart = editor.selectionEnd = caret;
+  previousText = editor.value;
+  scheduleSave();
+  render();
+  editor.focus();
+  ensureCaretLineVisible();
+}
+
+// True when the caret is inside an Excel function's parentheses AND the
+// preceding non-space character ends a value — so the next inserted ref needs a
+// leading comma. False right after `(` or `,`, after an operator/range colon,
+// or anywhere outside an Excel call (commas are only auto-added "in Excel
+// things").
+function needsExcelComma(before: string): boolean {
+  // Walk backwards to the innermost unclosed '('.
+  let depth = 0;
+  let openIdx = -1;
+  for (let i = before.length - 1; i >= 0; i--) {
+    const c = before[i];
+    if (c === ')') depth++;
+    else if (c === '(') {
+      if (depth === 0) { openIdx = i; break; }
+      depth--;
+    }
+  }
+  if (openIdx === -1) return false;
+  // The identifier immediately before that '(' must be an Excel function name.
+  const fn = /([A-Za-z_][A-Za-z0-9_]*)\s*$/.exec(before.slice(0, openIdx));
+  if (!fn || !isExcelFunctionName(fn[1])) return false;
+  // Only separate when following a value-end token (digit, ref/name char, %,
+  // or a closing paren/bracket) — not `(`, `,`, an operator, or a `:` range.
+  const trimmed = before.replace(/\s+$/, '');
+  return /[A-Za-z0-9_%)\]]/.test(trimmed.charAt(trimmed.length - 1));
+}
+
+// ============================================================
+// Find (Ctrl+F)
+// ============================================================
+//
+// Chrome-style in-note find. Matches are painted in #find-layer — a layer
+// behind the syntax overlay whose own text is transparent, so only the <mark>
+// backgrounds show through behind the colored text. The floating bar shows an
+// ordinal count (3/12) with prev / next / close, Enter / Shift+Enter and F3 to
+// cycle, and Escape to close (handled by the capture-phase Escape listener).
+
+interface FindMatch { start: number; end: number; }
+let findActive = false;
+let findMatches: FindMatch[] = [];
+let findCurrent = -1; // index into findMatches, -1 when none
+
+function openFind() {
+  if (findActive) {
+    // Already open: just re-focus & select the field, like pressing Ctrl+F twice.
+    findInput.focus();
+    findInput.select();
+    return;
+  }
+  findActive = true;
+  findBar.hidden = false;
+  // Prefill from a single-line editor selection, like Chrome.
+  const sel = editor.value.slice(editor.selectionStart, editor.selectionEnd);
+  if (sel && !sel.includes('\n')) findInput.value = sel;
+  autosizeFindInput();
+  runFind(findInput.value);
+  findInput.focus();
+  findInput.select();
+}
+
+function closeFind() {
+  if (!findActive) return;
+  findActive = false;
+  findBar.hidden = true;
+  findBar.classList.remove('no-results');
+  const landing = findCurrent >= 0 ? findMatches[findCurrent] : null;
+  findMatches = [];
+  findCurrent = -1;
+  findLayer.innerHTML = '';
+  // Leave the caret on the match the user was viewing, then hand focus back.
+  editor.focus();
+  if (landing) {
+    editor.selectionStart = landing.start;
+    editor.selectionEnd = landing.end;
+    ensureCaretLineVisible();
+  }
+}
+
+// Size the find input to its content: a ~6-char resting width that grows as the
+// query gets longer, capped so it never runs wide. Measured with a hidden span
+// in the input's own font (border-box reset means width includes its padding).
+let findMeasureEl: HTMLSpanElement | null = null;
+function autosizeFindInput() {
+  if (!findMeasureEl) {
+    findMeasureEl = document.createElement('span');
+    findMeasureEl.setAttribute('aria-hidden', 'true');
+    findMeasureEl.style.cssText =
+      'position:absolute;visibility:hidden;white-space:pre;top:-9999px;left:-9999px;';
+    document.body.appendChild(findMeasureEl);
+  }
+  const cs = getComputedStyle(findInput);
+  findMeasureEl.style.fontFamily = cs.fontFamily;
+  findMeasureEl.style.fontSize = cs.fontSize;
+  findMeasureEl.style.fontWeight = cs.fontWeight;
+  findMeasureEl.style.letterSpacing = cs.letterSpacing;
+  findMeasureEl.textContent = '000000'; // ~6-char resting baseline
+  const baseline = findMeasureEl.offsetWidth;
+  findMeasureEl.textContent = findInput.value;
+  const textW = findMeasureEl.offsetWidth;
+  // + horizontal padding (4px) and a little caret slack (3px); cap matches CSS.
+  const w = Math.max(baseline, textW) + 7;
+  findInput.style.width = `${Math.min(240, w)}px`;
+}
+
+function computeFindMatches(text: string, query: string): FindMatch[] {
+  if (!query) return [];
+  const hay = text.toLowerCase();
+  const needle = query.toLowerCase();
+  const out: FindMatch[] = [];
+  for (let i = hay.indexOf(needle); i !== -1; i = hay.indexOf(needle, i + needle.length)) {
+    out.push({ start: i, end: i + needle.length });
+  }
+  return out;
+}
+
+function runFind(query: string) {
+  findMatches = computeFindMatches(editor.value, query);
+  if (findMatches.length === 0) {
+    findCurrent = -1;
+  } else {
+    // Start at the first match at/after the editor caret (where the user was).
+    const caret = editor.selectionStart;
+    const idx = findMatches.findIndex(m => m.end > caret);
+    findCurrent = idx === -1 ? 0 : idx;
+  }
+  updateFindUi();
+  renderFindLayer();
+  scrollToCurrentMatch();
+}
+
+// Recompute against changed document text while the bar stays open, keeping the
+// highlighted ordinal near where it was. Called from render() on any edit.
+function refreshFindAfterEdit() {
+  const anchor = findCurrent >= 0 ? findMatches[findCurrent].start : editor.selectionStart;
+  findMatches = computeFindMatches(editor.value, findInput.value);
+  if (findMatches.length === 0) {
+    findCurrent = -1;
+  } else {
+    const idx = findMatches.findIndex(m => m.start >= anchor);
+    findCurrent = idx === -1 ? findMatches.length - 1 : idx;
+  }
+  updateFindUi();
+  renderFindLayer();
+}
+
+function findNext(dir: 1 | -1) {
+  if (findMatches.length === 0) return;
+  findCurrent = (findCurrent + dir + findMatches.length) % findMatches.length;
+  updateFindUi();
+  renderFindLayer();
+  scrollToCurrentMatch();
+}
+
+function updateFindUi() {
+  const total = findMatches.length;
+  const hasQuery = findInput.value.length > 0;
+  findCount.textContent = total === 0 ? '0/0' : `${findCurrent + 1}/${total}`;
+  // A non-empty query with no matches tints the whole bar pale red.
+  findBar.classList.toggle('no-results', hasQuery && total === 0);
+  findPrevBtn.disabled = total === 0;
+  findNextBtn.disabled = total === 0;
+}
+
+function renderFindLayer() {
+  if (!findActive || findMatches.length === 0) {
+    findLayer.innerHTML = '';
+    return;
+  }
+  findLayer.innerHTML = buildFindLayerHtml(editor.value, findMatches, findCurrent);
+  findLayer.scrollTop = editor.scrollTop;
+  findLayer.scrollLeft = editor.scrollLeft;
+}
+
+// Render the whole note as plain (transparent) text with a <mark> around each
+// match — no syntax spans, so wrapping a match is a trivial slice, and the
+// shared font/wrap rules keep every box aligned with the textarea. The find
+// input is single-line, so a match never spans a newline: each belongs to
+// exactly one rendered line, and we walk matches with one shared pointer.
+function buildFindLayerHtml(text: string, matches: FindMatch[], current: number): string {
+  const lines = text.split('\n');
+  const out: string[] = [];
+  let offset = 0;
+  let mi = 0;
+  for (const line of lines) {
+    const lineEnd = offset + line.length;
+    let html = '';
+    let cursor = offset;
+    while (mi < matches.length && matches[mi].start < lineEnd) {
+      const m = matches[mi];
+      html += escapeHtml(text.slice(cursor, m.start));
+      const cls = mi === current ? 'find-hit current' : 'find-hit';
+      html += `<mark class="${cls}">${escapeHtml(text.slice(m.start, m.end))}</mark>`;
+      cursor = m.end;
+      mi++;
+    }
+    html += escapeHtml(text.slice(cursor, lineEnd));
+    out.push(`<div class="ov-line">${html || '&#8203;'}</div>`);
+    offset = lineEnd + 1;
+  }
+  return out.join('');
+}
+
+function scrollToCurrentMatch() {
+  if (!findActive || findCurrent < 0) return;
+  const markEl = findLayer.querySelector<HTMLElement>('.find-hit.current');
+  if (!markEl) return;
+  const top = markEl.offsetTop;
+  const bottom = top + markEl.offsetHeight;
+  const pad = 28;
+  if (top < editor.scrollTop + pad) {
+    editor.scrollTop = Math.max(0, top - pad);
+  } else if (bottom > editor.scrollTop + editor.clientHeight - pad) {
+    editor.scrollTop = bottom - editor.clientHeight + pad;
+  }
+  syncScroll();
 }
 
 // ============================================================

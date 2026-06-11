@@ -510,9 +510,14 @@ function computeExpression(
     // 3. Replace line refs L<n>. Backward refs come from the current pass's
     //    accumulated results; forward refs fall back to the prior-pass
     //    snapshot so a line can reference one below it (resolves on iter 2+).
+    //    A ref that doesn't resolve to a finite number — an empty line, a text
+    //    line, an out-of-range line, or a line that itself errored — contributes
+    //    0, just like referencing a blank cell in Excel. (Ranges keep their own
+    //    skip-empties path in step 2, so AVERAGE over a range still ignores
+    //    blanks rather than averaging in zeros.)
     s = s.replace(LINE_REF_RE, (_m, n) => {
       const refIdx = Number(n) - 1;
-      if (refIdx < 0) return 'NaN';
+      if (refIdx < 0) return '(0)';
       if (refIdx < ctx.results.length) {
         const ref = ctx.results[refIdx];
         if (ref && ref.numeric !== undefined && isFinite(ref.numeric)) {
@@ -525,7 +530,7 @@ function computeExpression(
           return `(${ref.numeric})`;
         }
       }
-      return 'NaN';
+      return '(0)';
     });
 
     // 4. Replace standalone `x` (not part of an identifier) with `*`. Done

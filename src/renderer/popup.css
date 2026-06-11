@@ -543,6 +543,7 @@ body {
   min-height: 0;
   background: var(--bg);
   overflow: hidden;
+  position: relative;
 }
 
 /* In text-mode: hide the result column entirely. Line numbers stay (useful
@@ -581,6 +582,34 @@ body.text-mode .result-gutter { display: none; }
   align-items: flex-start;
   justify-content: flex-end;
   white-space: nowrap;
+}
+
+/* Each line number is a button: click it to insert that line's L-ref at the
+   caret. Pointer + a blue pill on hover (and a darker press state) make the
+   affordance obvious. */
+.line-gutter .row[data-line] {
+  cursor: pointer;
+  border-radius: 4px;
+  transition: background 90ms ease, color 90ms ease;
+}
+.line-gutter .row[data-line]:hover {
+  color: #0ea5e9;
+  background: rgba(14, 165, 233, 0.16);
+  font-weight: 600;
+}
+.line-gutter .row[data-line]:active {
+  background: rgba(14, 165, 233, 0.30);
+}
+:root[data-theme="dark"] .line-gutter .row[data-line]:hover,
+:root[data-theme="system"] .line-gutter .row[data-line]:hover {
+  color: #38bdf8;
+  background: rgba(56, 189, 248, 0.18);
+}
+@media (prefers-color-scheme: dark) {
+  :root[data-theme="system"] .line-gutter .row[data-line]:hover {
+    color: #38bdf8;
+    background: rgba(56, 189, 248, 0.18);
+  }
 }
 .result-gutter .row {
   display: flex;
@@ -667,7 +696,7 @@ body.text-mode .result-gutter { display: none; }
   overflow: hidden;
 }
 
-.editor, .syntax-overlay, .measure {
+.editor, .syntax-overlay, .measure, .find-layer {
   font-family: var(--font-mono);
   font-size: var(--editor-font-size);
   line-height: var(--line-height);
@@ -722,6 +751,124 @@ body.text-mode .result-gutter { display: none; }
   height: auto;
   white-space: pre-wrap;
   word-break: break-word;
+}
+
+/* ---------- find (Ctrl+F) ---------- */
+/* A highlight layer behind the syntax overlay. Its own text is transparent;
+   only the <mark> backgrounds show, sitting behind the colored overlay text.
+   Shares the editor's font/wrap rules above, so match boxes align exactly. */
+/* overflow:auto (not hidden) so it reserves the same 8px scrollbar gutter as
+   the textarea/overlay when content overflows — otherwise its wider content
+   would wrap differently and the match boxes would drift out of alignment. Its
+   scrollbar sits behind the textarea's (z-index), so only one is ever seen. */
+.find-layer {
+  position: absolute;
+  inset: 0;
+  overflow: auto;
+  pointer-events: none;
+  color: transparent;
+  background: transparent;
+  z-index: 0;
+}
+.find-layer .ov-line {
+  display: block;
+  white-space: pre-wrap;
+  word-break: break-word;
+  overflow-wrap: break-word;
+}
+.find-hit {
+  color: transparent;
+  background: rgba(250, 204, 21, 0.45);
+  border-radius: 2px;
+}
+.find-hit.current {
+  background: rgba(249, 115, 22, 0.72);
+}
+:root[data-theme="dark"] .find-hit,
+:root[data-theme="system"] .find-hit { background: rgba(250, 204, 21, 0.36); }
+:root[data-theme="dark"] .find-hit.current,
+:root[data-theme="system"] .find-hit.current { background: rgba(249, 115, 22, 0.85); }
+@media (prefers-color-scheme: dark) {
+  :root[data-theme="system"] .find-hit { background: rgba(250, 204, 21, 0.36); }
+  :root[data-theme="system"] .find-hit.current { background: rgba(249, 115, 22, 0.85); }
+}
+
+.find-bar {
+  position: absolute;
+  top: 8px;
+  right: 14px;
+  z-index: 30;
+  display: flex;
+  align-items: center;
+  gap: 1px;
+  padding: 3px 4px 3px 11px;
+  background: var(--bg-elev);
+  border: 1px solid var(--border-strong);
+  border-radius: 9px;
+  box-shadow: 0 4px 16px rgba(15, 23, 42, 0.18);
+  font-family: var(--font-ui);
+  transition: background 130ms ease, border-color 130ms ease;
+}
+.find-bar[hidden] { display: none; }
+/* Non-empty query with no matches: the whole bar goes pale red (keep the
+   neutral border — no red outline). */
+.find-bar.no-results {
+  background: var(--error-soft);
+}
+.find-bar.no-results .find-count { color: var(--error); }
+.find-input {
+  border: 0;
+  outline: 0;
+  background: transparent;
+  color: var(--text);
+  width: 58px;          /* resting ~6 chars; JS grows it to fit the query */
+  max-width: 240px;
+  font-size: 13px;
+  font-family: inherit;
+  padding: 3px 2px;
+  transition: width 70ms ease-out;
+}
+.find-input::placeholder { color: var(--text-faint); }
+.find-count {
+  color: var(--text-faint);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  padding: 0 6px;
+  min-width: 40px;
+  text-align: right;
+}
+.find-divider {
+  width: 1px;
+  align-self: stretch;
+  margin: 4px 4px 4px 2px;
+  background: var(--border);
+}
+.find-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-soft);
+  cursor: pointer;
+  transition: background 90ms ease, color 90ms ease;
+}
+.find-btn:hover:not(:disabled) {
+  background: var(--accent-soft);
+  color: var(--text);
+}
+.find-btn:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+.find-btn.find-close:hover {
+  background: var(--error-soft);
+  color: var(--error);
 }
 
 /* ---------- syntax tokens ---------- */

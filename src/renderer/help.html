@@ -14,9 +14,11 @@
   <nav class="toc" aria-label="Table of contents">
     <a href="#overview">Overview</a>
     <a href="#window">Window controls</a>
+    <a href="#tabs">Tabs</a>
     <a href="#modes">Math &amp; text modes</a>
     <a href="#numbers">Numbers &amp; formatting</a>
     <a href="#currency">Currency symbols</a>
+    <a href="#quoted">Quoted text (notes)</a>
     <a href="#directives">Directives</a>
     <a href="#slashmenu">Slash command menu</a>
     <a href="#suffixes">Suffixes (k, m, b, t)</a>
@@ -29,6 +31,7 @@
     <a href="#excel">Excel-style formulas</a>
     <a href="#iffunction">IF, TRUE / FALSE</a>
     <a href="#equalsprefix">Excel = prefix</a>
+    <a href="#find">Find (Ctrl+F)</a>
     <a href="#errors">Error indicators</a>
     <a href="#selection">Selection footer</a>
     <a href="#functions">Functions &amp; constants</a>
@@ -56,18 +59,54 @@
       <h2>Window controls</h2>
       <p>The header from left to right:</p>
       <ul>
-        <li><strong>Drag handle</strong> — click and drag anywhere in the header to move the window.</li>
-        <li><strong>Math / Text</strong> — switch the editor between math evaluation and plain text.</li>
+        <li><strong>📄 Tabs</strong> — open the tab bar to switch between notes
+          and add, rename, reorder, or close them. See <a href="#tabs">Tabs</a> below.</li>
+        <li><strong>🕒 Recently Closed</strong> — reopen a tab you closed by
+          mistake. Hover to see the list of recently closed notes.</li>
+        <li><strong>∑ Math / Text</strong> — switch the editor between math
+          evaluation and plain text. The icon reflects the current mode.</li>
+        <li><strong>Drag handle</strong> — click and drag anywhere in the empty
+          part of the header to move the window.</li>
         <li><strong>📌 Pin</strong> — keep the window above other apps. Highlights when active.</li>
         <li><strong>ƒ Variables</strong> — hover to see every variable currently
           defined in the note and its current value. Details in the
           <a href="#varspopup">Variables popup</a> section below.</li>
         <li><strong>?</strong> — opens this help page.</li>
-        <li><strong>⚙</strong> — opens Settings.</li>
+        <li><strong>⚙ Settings</strong> — opens Settings. A small blue dot
+          appears here when an update has been downloaded and is ready to install.</li>
         <li><strong>×</strong> — hides the window. The app stays in the tray.</li>
       </ul>
       <p>The window is resizable from any edge. Position and size are remembered
         between sessions.</p>
+    </section>
+
+    <section id="tabs">
+      <h2>Tabs</h2>
+      <p>Keep several independent notes open at once, each with its own content
+        and Math/Text mode. Click <strong>📄</strong> in the header to toggle the
+        tab bar that slides in just below the toolbar.</p>
+      <ul>
+        <li><strong>Switch</strong> — click a tab, or cycle with
+          <kbd>Ctrl</kbd>+<kbd>Tab</kbd> /
+          <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>Tab</kbd>. The active tab is
+          highlighted.</li>
+        <li><strong>New tab</strong> — click the <strong>+</strong> on the right
+          of the bar, or press <kbd>Ctrl</kbd>+<kbd>T</kbd>.</li>
+        <li><strong>Close</strong> — click the <strong>×</strong> on a tab, or
+          press <kbd>Ctrl</kbd>+<kbd>W</kbd> for the current one.</li>
+        <li><strong>Rename</strong> — right-click a tab and choose
+          <em>Rename</em>, or press <kbd>Ctrl</kbd>+<kbd>L</kbd>.</li>
+        <li><strong>Reorder</strong> — drag a tab along the bar, or use
+          <em>Reorder</em> from the right-click menu (also on the overflow
+          chevron).</li>
+        <li><strong>Overflow</strong> — when there are more tabs than fit, a
+          chevron appears next to <strong>+</strong>; hover or click it for the
+          rest. If the tab you're on lives in the overflow, it's surfaced into
+          the bar with a small divider so you can always see where you are.</li>
+      </ul>
+      <p><strong>Restore a closed tab.</strong> Press <kbd>Ctrl</kbd>+<kbd>Z</kbd>
+        immediately after closing a tab to bring it back, or open the
+        <strong>🕒 Recently Closed</strong> list in the header and pick one.</p>
     </section>
 
     <section id="modes">
@@ -105,6 +144,28 @@
       </ul>
       <p>Recognized: <code>$ € £ ¥ ₹ ₽ ¢ ₩ ₪ ₫ ₴ ₸ ₺ ฿</code>. They render with a
         muted color in the editor so you can see they're decorative.</p>
+    </section>
+
+    <section id="quoted">
+      <h2>Quoted text (notes)</h2>
+      <p>Anything wrapped in single <code>'…'</code> or double <code>"…"</code>
+        quotes is treated as a note and <strong>completely ignored</strong> by
+        the math, so you can annotate a line and still get a clean result:</p>
+      <ul>
+        <li><code>5 * 2 '234'</code> → <code>10</code> (the quoted part is dropped)</li>
+        <li><code>1000 + 250  "deposit"</code> → <code>1,250</code></li>
+        <li><code>'Invoice 1291 — confirm it's 1.9'</code> → no result; the whole
+          line is just a note (it shows blank in the result column rather than
+          echoing the text).</li>
+      </ul>
+      <p>Two conveniences make this painless:</p>
+      <ul>
+        <li>Numbers inside quotes are left exactly as typed — they don't get
+          auto-commas, since they're text, not math.</li>
+        <li>Only the <em>outermost</em> pair of quotes is matched, so an
+          apostrophe in the middle (like <code>it's</code>) won't break the
+          line.</li>
+      </ul>
     </section>
 
     <section id="directives">
@@ -210,6 +271,17 @@ L1 * 0.07</code></pre>
         a numeric result, e.g. <code>L1: 1,250</code>. Use the arrow keys to
         navigate, <kbd>Enter</kbd> or click to insert the reference. The
         popup follows the same flip-above / 5-item rules as the slash menu.</p>
+      <p><strong>Click a line number to insert its ref.</strong> The numbers in
+        the left gutter are buttons — they highlight when you hover. Click one
+        and its <code>L&lt;n&gt;</code> drops in at the cursor. Inside an
+        Excel-style function, clicking several line numbers in a row separates
+        them with commas automatically
+        (<code>SUM(</code> → click L1, L2, L3 → <code>SUM(L1, L2, L3)</code>);
+        anywhere else it just inserts the bare ref so you supply the operators.</p>
+      <p><strong>Empty lines count as 0.</strong> A reference to a blank line (or
+        one with no numeric result) contributes <code>0</code> instead of
+        erroring, just like an empty cell in Excel — so <code>L5 + 10</code> is
+        <code>10</code> when L5 is empty.</p>
       <p><strong>Forward references work too.</strong> A line on row 2 can
         reference <code>L3</code> or any later line — the evaluator runs in
         passes until results stabilize, so forward refs resolve as long as
@@ -243,7 +315,7 @@ AVERAGE(L1:L3)    → 20</code></pre>
       </ul>
       <p>Because <code>x</code> is reserved as an operator, you can't define
         a variable called <code>x</code>. If you try, the result column
-        shows <strong>N/A</strong> with a hover tooltip explaining why.</p>
+        shows <strong>error</strong> with a hover tooltip explaining why.</p>
     </section>
 
     <section id="percent">
@@ -336,29 +408,60 @@ AVERAGE(L1:L3)    → 20</code></pre>
       </ul>
     </section>
 
+    <section id="find">
+      <h2>Find (<kbd>Ctrl</kbd>+<kbd>F</kbd>)</h2>
+      <p>Press <kbd>Ctrl</kbd>+<kbd>F</kbd> to open a search bar in the top-right
+        of the editor. Type to search the current note — every match is
+        highlighted, with the current one in orange — and a counter shows
+        <code>3/12</code> as you go.</p>
+      <ul>
+        <li><strong>Navigate</strong> — <kbd>Enter</kbd> /
+          <kbd>Shift</kbd>+<kbd>Enter</kbd>, the <strong>▲ / ▼</strong> buttons,
+          or <kbd>F3</kbd> / <kbd>Shift</kbd>+<kbd>F3</kbd>. It wraps around and
+          scrolls the current match into view.</li>
+        <li><strong>Close</strong> — <kbd>Esc</kbd> or the <strong>×</strong>;
+          the cursor lands on the match you were viewing so you can keep
+          editing there.</li>
+        <li><strong>Handy touches</strong> — the bar prefills with any text you
+          had selected, the box grows as you type, and the whole bar tints pale
+          red when there are no matches. Searching is case-insensitive.</li>
+        <li><kbd>Ctrl</kbd>+<kbd>F</kbd> while you're already typing in the box
+          closes it; otherwise it (re)focuses the box and selects the text.</li>
+      </ul>
+    </section>
+
     <section id="errors">
       <h2>Error indicators</h2>
-      <p>The result column shows different markers for different problems.
-        Hover over any of them to see a styled tooltip explaining the issue:</p>
+      <p>Problems are shown calmly in the <em>result column</em> only — the
+        editor line itself is never highlighted or underlined in red, so typing
+        stays quiet. Hover any marker for a tooltip explaining the issue.</p>
+      <p>There are just two visual styles:</p>
       <ul>
-        <li><strong>N/A</strong> — you tried to assign to <code>x</code>,
-          which is reserved as a multiplication operator.</li>
-        <li><strong>Excel Formula</strong> (red) — you tried to assign to a
-          name that's reserved as an Excel-style function (<code>sum</code>,
-          <code>round</code>, etc.). Tooltip lists every reserved name.</li>
-        <li><strong>Reserved</strong> — you tried to assign to a reserved
-          name like a line ref (<code>L1 = 5</code>), a math constant
-          (<code>pi = 5</code>), or a literal (<code>true = 5</code>). These
-          names can't be used as variables.</li>
-        <li><strong>err</strong> (red) — usually means a bare word the
-          evaluator doesn't recognize. Tooltip says "Add Quotations" when it
-          looks like an unquoted text value (the only words that work without
-          quotes are <code>TRUE</code> and <code>FALSE</code>).</li>
-        <li><strong>blank with red underline in the editor</strong> —
-          parse-in-progress: you're mid-typing an expression that isn't
-          finished yet (e.g. <code>SUM(</code>). The result column stays
-          empty so it doesn't flash error noise while you type.</li>
+        <li><strong>N/A</strong> — a soft grey placeholder for a line that's
+          simply <em>incomplete</em>, i.e. you're still mid-typing (a trailing
+          operator, an unclosed <code>SUM(</code>, etc.). It's not really an
+          error, so it stays quiet.</li>
+        <li>A muted, dotted-underlined marker for a genuine mistake. All of
+          these share the same calm color (not an aggressive red):
+          <ul>
+            <li><strong>error</strong> — the evaluator couldn't resolve the
+              line: an unknown bare word (tooltip <em>"Add Quotations"</em> —
+              wrap text values in quotes; only <code>TRUE</code>/<code>FALSE</code>
+              work bare), assigning to <code>x</code>, or an otherwise invalid
+              expression.</li>
+            <li><strong>Excel Formula</strong> — you assigned to an Excel
+              function name (<code>sum = 5</code>). The tooltip lists them.</li>
+            <li><strong>Duplicate</strong> — that variable name is already
+              defined on an earlier line; rename one of them.</li>
+            <li><strong>Reserved</strong> — you assigned to a reserved name: a
+              line ref (<code>L1 = 5</code>), a constant (<code>pi = 5</code>),
+              or a literal (<code>true = 5</code>).</li>
+          </ul>
+        </li>
       </ul>
+      <p>While a line is mid-edit and temporarily fails to parse, the previous
+        good result is kept (shown slightly faded) instead of flashing an
+        error.</p>
     </section>
 
     <section id="selection">
@@ -406,13 +509,19 @@ AVERAGE(L1:L3)    → 20</code></pre>
       <table class="shortcut-table">
         <tbody>
           <tr><td><kbd>Ctrl</kbd>+<kbd>Alt</kbd>+<kbd>M</kbd></td><td>Show / hide the popup from anywhere</td></tr>
-          <tr><td><kbd>Ctrl</kbd>+<kbd>Z</kbd></td><td>Undo (typing bursts grouped, programmatic edits captured)</td></tr>
+          <tr><td><kbd>Ctrl</kbd>+<kbd>F</kbd></td><td>Open / toggle the Find bar</td></tr>
+          <tr><td><kbd>F3</kbd> / <kbd>Shift</kbd>+<kbd>F3</kbd></td><td>Find next / previous match</td></tr>
+          <tr><td><kbd>Ctrl</kbd>+<kbd>T</kbd></td><td>New tab</td></tr>
+          <tr><td><kbd>Ctrl</kbd>+<kbd>W</kbd></td><td>Close the current tab</td></tr>
+          <tr><td><kbd>Ctrl</kbd>+<kbd>L</kbd></td><td>Rename the current tab</td></tr>
+          <tr><td><kbd>Ctrl</kbd>+<kbd>Tab</kbd> / <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>Tab</kbd></td><td>Next / previous tab</td></tr>
+          <tr><td><kbd>Ctrl</kbd>+<kbd>Z</kbd></td><td>Undo — or restore the just-closed tab if closing one was your last action</td></tr>
           <tr><td><kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>Z</kbd> / <kbd>Ctrl</kbd>+<kbd>Y</kbd></td><td>Redo</td></tr>
           <tr><td><kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>C</kbd></td><td>Copy the current line's numeric result</td></tr>
           <tr><td><kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>M</kbd></td><td>Copy the whole note as markdown with results inline</td></tr>
           <tr><td><kbd>Tab</kbd></td><td>Smart-jump past the current number (including suffix), inserting a trailing space and reformatting</td></tr>
           <tr><td><kbd>↑</kbd> / <kbd>↓</kbd> / <kbd>Enter</kbd></td><td>Navigate / confirm in the slash and L popups</td></tr>
-          <tr><td><kbd>Esc</kbd></td><td>Close an open popup, or hide the window if no popup is open</td></tr>
+          <tr><td><kbd>Esc</kbd></td><td>Close the Find bar or an open popup; otherwise hide the window</td></tr>
           <tr><td><kbd>Space</kbd> / operator / <kbd>Enter</kbd></td><td>Triggers auto-format and suffix expansion</td></tr>
         </tbody>
       </table>
@@ -432,7 +541,11 @@ AVERAGE(L1:L3)    → 20</code></pre>
 
     <section id="updating">
       <h2>Updating</h2>
-      <p>When a new version is released, you can update the app directly from Settings:</p>
+      <p>Math Popup checks for updates automatically — shortly after launch and
+        periodically while it's running — and downloads any new version in the
+        background. When one is ready, a small <strong>blue dot</strong> appears
+        on the <strong>⚙</strong> icon to let you know.</p>
+      <p>You can also check or install manually from Settings:</p>
       <ol>
         <li>Click the <strong>⚙</strong> icon in the header or right-click the tray icon to open <strong>Settings</strong>.</li>
         <li>Scroll to the bottom to find the <strong>About</strong> section.</li>

@@ -37,6 +37,7 @@
   <main class="editor-shell">
     <div id="line-gutter" class="line-gutter" aria-hidden="true"></div>
     <div class="editor-stack">
+      <pre id="find-layer" class="find-layer" aria-hidden="true"></pre>
       <pre id="syntax-overlay" class="syntax-overlay" aria-hidden="true"></pre>
       <textarea id="editor"
                 class="editor"
@@ -48,6 +49,20 @@
       <div id="measure" class="measure" aria-hidden="true"></div>
     </div>
     <div id="result-gutter" class="result-gutter" aria-hidden="true"></div>
+    <div id="find-bar" class="find-bar" role="search" hidden>
+      <input id="find-input" class="find-input" type="text" placeholder="Find" spellcheck="false" autocomplete="off" aria-label="Find in note" />
+      <span id="find-count" class="find-count">0/0</span>
+      <span class="find-divider"></span>
+      <button id="find-prev" class="find-btn" title="Previous match (Shift+Enter)" aria-label="Previous match" disabled>
+        <svg viewBox="0 0 12 12" width="11" height="11" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M2.5 7.5 L6 4 L9.5 7.5"/></svg>
+      </button>
+      <button id="find-next" class="find-btn" title="Next match (Enter)" aria-label="Next match" disabled>
+        <svg viewBox="0 0 12 12" width="11" height="11" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M2.5 4.5 L6 8 L9.5 4.5"/></svg>
+      </button>
+      <button id="find-close" class="find-btn find-close" title="Close (Esc)" aria-label="Close find">
+        <svg viewBox="0 0 12 12" width="11" height="11" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><path d="M3 3 L9 9 M9 3 L3 9"/></svg>
+      </button>
+    </div>
   </main>
   <div id="cmd-menu" class="cmd-menu" role="listbox" aria-hidden="true" hidden></div>
   <div id="signature-tooltip" class="signature-tooltip" hidden></div>
