@@ -2,6 +2,7 @@ import { evaluateNote, evaluateSelectedText, LineResult, EXCEL_FORMULA_TOOLTIP, 
 import { highlightNote, ActiveToken } from './highlighter';
 import { formatWithCommas, formatResult } from './formatter';
 import type { Mode, Page, Settings, Suffix, ThemePref } from '../shared/types';
+import { ZOOM_MIN, ZOOM_MAX, ZOOM_STEP } from '../shared/types';
 
 const editor = document.getElementById('editor') as HTMLTextAreaElement;
 const overlay = document.getElementById('syntax-overlay') as HTMLPreElement;
@@ -16,6 +17,7 @@ const helpBtn = document.getElementById('open-help') as HTMLButtonElement;
 const varsBtn = document.getElementById('show-vars') as HTMLButtonElement;
 const varsPopup = document.getElementById('vars-popup') as HTMLDivElement;
 const pageIndicator = document.getElementById('page-indicator') as HTMLSpanElement;
+const zoomIndicator = document.getElementById('zoom-indicator') as HTMLSpanElement;
 const cmdMenu = document.getElementById('cmd-menu') as HTMLDivElement;
 const hoverTooltip = document.getElementById('hover-tooltip') as HTMLDivElement;
 
@@ -23,13 +25,26 @@ let settings: Settings;
 let closedPages: Page[] = [];
 let pages: Page[] = [];
 let activePageId: string = '';
+// True immediately after a tab is closed (cleared on any edit/navigation) so
+// that an immediate Ctrl+Z restores the just-closed tab instead of undoing text.
+let justClosedTab = false;
+// Id of the chip currently being drag-reordered, if any.
+let dragSrcId: string | null = null;
+let overflowHideTimer: number | null = null;
+// When true, the overflow dropdown is in drag-to-reorder mode (shows all tabs).
+let reorderMode = false;
 let lastResults: LineResult[] = [];
 let saveTimer: number | null = null;
 let activeToken: ActiveToken | null = null;
 const tabsBtn = document.getElementById('tabs-btn') as HTMLButtonElement;
 const archiveBtn = document.getElementById('archive-btn') as HTMLButtonElement;
 const modeToggleBtn = document.getElementById('mode-toggle-btn') as HTMLButtonElement;
-const tabsPopup = document.getElementById('tabs-popup') as HTMLDivElement;
+const tabBar = document.getElementById('tab-bar') as HTMLElement;
+const tabStrip = document.getElementById('tab-strip') as HTMLElement;
+const tabAddBtn = document.getElementById('tab-add-btn') as HTMLButtonElement;
+const overflowBtn = document.getElementById('tab-overflow-btn') as HTMLButtonElement;
+const overflowPopup = document.getElementById('tab-overflow-popup') as HTMLDivElement;
+const contextMenu = document.getElementById('tab-context-menu') as HTMLDivElement;
 const archivePopup = document.getElementById('archive-popup') as HTMLDivElement;
 
 const COPY_ICON_HTML = `<span class="copy-icon"><svg class="copy-svg" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="0.75" width="7.25" height="7.25" rx="1.25"/><rect x="0.75" y="4" width="7.25" height="7.25" rx="1.25"/></svg></span>`;
@@ -51,12 +66,13 @@ async function init() {
   }
   const activePage = pages.find(p => p.id === activePageId) || pages[0];
   activePageId = activePage.id;
-  
+
   editor.value = activePage.content;
   previousText = editor.value;
   applyTheme(settings.theme);
   applyMode(activePage.mode);
   applyAlwaysOnTop(settings.alwaysOnTop);
+  applyZoom(settings.zoom ?? 1, { silent: true });
   bindEvents();
   // Re-render syntax overlay if the system theme flips while the app is open.
   window.mathPopup.onThemeChanged(() => render());
@@ -65,9 +81,69 @@ async function init() {
   editor.focus();
 }
 
+// ============================================================
+// Zoom
+// ============================================================
+let currentZoom = 1;
+let zoomFlashTimer: number | null = null;
+let zoomSaveTimer: number | null = null;
+
+function clampZoom(z: number): number {
+  if (!Number.isFinite(z)) return 1;
+  if (z < ZOOM_MIN) return ZOOM_MIN;
+  if (z > ZOOM_MAX) return ZOOM_MAX;
+  // Snap to one decimal place to avoid floating-point drift across many steps.
+  return Math.round(z * 10) / 10;
+}
+
+function applyZoom(factor: number, opts: { silent?: boolean } = {}) {
+  const next = clampZoom(factor);
+  currentZoom = next;
+  window.mathPopup.setZoomFactor(next);
+  updateZoomIndicator(!opts.silent);
+  // Persist (debounced) so it survives restart. Skip during the initial
+  // hydrate so we don't echo the value back to disk for no reason.
+  if (!opts.silent) {
+    if (zoomSaveTimer) window.clearTimeout(zoomSaveTimer);
+    zoomSaveTimer = window.setTimeout(() => {
+      window.mathPopup.setSettings({ zoom: currentZoom });
+    }, 250);
+  }
+}
+
+function updateZoomIndicator(flash: boolean) {
+  const pct = Math.round(currentZoom * 100);
+  zoomIndicator.textContent = `${pct}%`;
+  // Visible whenever not at 100%, OR briefly after a change.
+  const notDefault = pct !== 100;
+  if (flash) {
+    zoomIndicator.hidden = false;
+    zoomIndicator.classList.add('flash');
+    if (zoomFlashTimer) window.clearTimeout(zoomFlashTimer);
+    zoomFlashTimer = window.setTimeout(() => {
+      zoomIndicator.classList.remove('flash');
+      // Hide only if we're back at 100% — otherwise stay visible (no flash).
+      if (Math.round(currentZoom * 100) === 100) zoomIndicator.hidden = true;
+    }, 1200);
+  } else {
+    zoomIndicator.hidden = !notDefault;
+    zoomIndicator.classList.remove('flash');
+  }
+}
+
+function zoomBy(deltaSteps: number) {
+  applyZoom(currentZoom + deltaSteps * ZOOM_STEP);
+}
+
+function resetZoom() {
+  applyZoom(settings?.zoomDefault ?? 1);
+}
+
 function updatePageIndicator() {
   const activePage = pages.find(p => p.id === activePageId);
   if (activePage) pageIndicator.textContent = activePage.title || 'Page';
+  // Keep the inline tab bar's active chip in sync (no-op while it's closed).
+  refreshTabBar();
 }
 
 function applyTheme(theme: ThemePref) {
@@ -93,20 +169,80 @@ function bindEvents() {
   pinBtn.addEventListener('click', toggleAlwaysOnTop);
   helpBtn.addEventListener('click', () => window.mathPopup.openHelp());
 
-  // Dropdowns
-  tabsBtn.addEventListener('mouseenter', showTabsPopup);
-  tabsBtn.addEventListener('mouseleave', scheduleHideTabsPopup);
-  tabsPopup.addEventListener('mouseenter', cancelHideTabsPopup);
-  tabsPopup.addEventListener('mouseleave', scheduleHideTabsPopup);
+  // Zoom: Ctrl+wheel and Ctrl+Plus/Minus/0. Window-level so it works whether
+  // the editor or any button has focus.
+  window.addEventListener('wheel', (e) => {
+    if (!e.ctrlKey) return;
+    e.preventDefault();
+    zoomBy(e.deltaY < 0 ? 1 : -1);
+  }, { passive: false });
+  window.addEventListener('keydown', (e) => {
+    if (!(e.ctrlKey || e.metaKey) || e.altKey) return;
+    // Plus: handles both '+' (shifted) and '=' (same key), and numpad add.
+    if (e.key === '+' || e.key === '=' || e.code === 'NumpadAdd') {
+      e.preventDefault();
+      zoomBy(1);
+    } else if (e.key === '-' || e.key === '_' || e.code === 'NumpadSubtract') {
+      e.preventDefault();
+      zoomBy(-1);
+    } else if (e.key === '0' || e.code === 'Numpad0') {
+      e.preventDefault();
+      resetZoom();
+    }
+  });
 
-  archiveBtn.addEventListener('mouseenter', showArchivePopup);
-  archiveBtn.addEventListener('mouseleave', scheduleHideArchivePopup);
+  // Tabs: click the button to toggle the inline tab bar open/closed.
+  tabsBtn.addEventListener('click', toggleTabBar);
+  tabAddBtn.addEventListener('click', () => addTab());
+  // Overflow chevron: opens on hover or click, lists the clipped tabs.
+  overflowBtn.addEventListener('click', toggleOverflowPopup);
+  overflowBtn.addEventListener('mouseenter', () => { cancelHideOverflow(); showOverflowPopup(); });
+  overflowBtn.addEventListener('mouseleave', scheduleHideOverflow);
+  // Right-clicking the chevron offers "Reorder tabs".
+  overflowBtn.addEventListener('contextmenu', (e) => {
+    e.preventDefault();
+    cancelHideOverflow();
+    showTabContextMenu(null, e.clientX, e.clientY);
+  });
+  overflowPopup.addEventListener('mouseenter', cancelHideOverflow);
+  overflowPopup.addEventListener('mouseleave', scheduleHideOverflow);
+  // Re-evaluate which tabs overflow when the window is resized.
+  window.addEventListener('resize', () => { layoutTabs(); hideOverflowPopup(); hideTabContextMenu(); });
+  // Dismiss the tab right-click menu / dropdown on any outside click.
+  document.addEventListener('mousedown', (e) => {
+    const t = e.target as Node;
+    if (!contextMenu.hidden && !contextMenu.contains(t)) hideTabContextMenu();
+    if (!overflowPopup.hidden && !reorderMode &&
+        !overflowPopup.contains(t) && !overflowBtn.contains(t) && !contextMenu.contains(t)) {
+      hideOverflowPopup();
+    }
+  });
+  // Escape closes (in priority) the right-click menu, reorder mode, then the
+  // dropdown — before the editor's Escape hides the whole window. Capture phase
+  // so it pre-empts the editor handler; only swallow Escape if it closed one.
+  document.addEventListener('keydown', (e) => {
+    if (e.key !== 'Escape') return;
+    let handled = true;
+    if (!contextMenu.hidden) hideTabContextMenu();
+    else if (reorderMode) exitReorderMode(false);
+    else if (!overflowPopup.hidden) hideOverflowPopup();
+    else handled = false;
+    if (handled) { e.preventDefault(); e.stopPropagation(); }
+  }, true);
+  window.addEventListener('blur', hideTabContextMenu);
+
+  // Dropdowns. Schedule the show on hover-intent so brief mouse passes
+  // (e.g. moving back into the window) don't pop dropdowns open.
+  archiveBtn.addEventListener('mouseenter', scheduleShowArchivePopup);
+  archiveBtn.addEventListener('mouseleave', () => { cancelShowArchivePopup(); scheduleHideArchivePopup(); });
+  archiveBtn.addEventListener('click', showArchivePopup);
   archivePopup.addEventListener('mouseenter', cancelHideArchivePopup);
   archivePopup.addEventListener('mouseleave', scheduleHideArchivePopup);
 
   // Variables popup
-  varsBtn.addEventListener('mouseenter', showVarsPopup);
-  varsBtn.addEventListener('mouseleave', scheduleHideVarsPopup);
+  varsBtn.addEventListener('mouseenter', scheduleShowVarsPopup);
+  varsBtn.addEventListener('mouseleave', () => { cancelShowVarsPopup(); scheduleHideVarsPopup(); });
+  varsBtn.addEventListener('click', showVarsPopup);
   varsBtn.addEventListener('focus', showVarsPopup);
   varsBtn.addEventListener('blur', hideVarsPopup);
   varsPopup.addEventListener('mouseenter', cancelHideVarsPopup);
@@ -116,6 +252,11 @@ function bindEvents() {
     const activePage = pages.find(p => p.id === activePageId);
     if (activePage) setMode(activePage.mode === 'math' ? 'text' : 'math');
   });
+
+  // Update indicator: dot on the settings (⚙) button while there's a pending
+  // update. Pull the current phase on load, then react to live changes.
+  window.mathPopup.getUpdateState().then(applyUpdateIndicator);
+  window.mathPopup.onUpdateState(applyUpdateIndicator);
 
   // Listen for settings changes pushed via a polling refresh-on-focus.
   window.addEventListener('focus', async () => {
@@ -130,6 +271,12 @@ function bindEvents() {
     }
     applyTheme(settings.theme);
     applyAlwaysOnTop(settings.alwaysOnTop);
+    // If settings UI changed the saved zoom, reflect it. We compare to the
+    // running value so the user's transient Ctrl+scroll level isn't clobbered
+    // every time the window regains focus.
+    if (typeof settings.zoom === 'number' && Math.abs(settings.zoom - currentZoom) > 0.001) {
+      applyZoom(settings.zoom, { silent: true });
+    }
     render();
   });
 }
@@ -148,6 +295,15 @@ function applyMode(mode: Mode) {
   document.body.classList.toggle('text-mode', mode === 'text');
   modeToggleBtn.title = mode === 'math' ? 'Mode: Math' : 'Mode: Text';
   modeToggleBtn.innerHTML = mode === 'math' ? '∑' : 'Aa';
+}
+
+function applyUpdateIndicator(state: { phase: string }) {
+  const showDot =
+    state.phase === 'available' ||
+    state.phase === 'downloading' ||
+    state.phase === 'downloaded';
+  settingsBtn.classList.toggle('has-update', showDot);
+  settingsBtn.title = showDot ? 'Settings — update available' : 'Settings';
 }
 
 // Per-tab mode lives on activePage.mode. settings.mode is a legacy/global
@@ -171,6 +327,7 @@ function toggleAlwaysOnTop() {
 }
 
 function onInput() {
+  justClosedTab = false;
   const previousToken = activeToken;
   activeToken = null;
   if (currentMode() === 'math') {
@@ -483,22 +640,255 @@ function scheduleSave() {
   }, 250);
 }
 
-let tabsHoverTimer: number | null = null;
 let archiveHoverTimer: number | null = null;
+let archiveShowTimer: number | null = null;
 
-function showTabsPopup() {
-  if (tabsHoverTimer) window.clearTimeout(tabsHoverTimer);
-  renderTabsMenu();
-  tabsPopup.hidden = false;
-  const rect = tabsBtn.getBoundingClientRect();
-  tabsPopup.style.top = `${rect.bottom + 4}px`;
-  tabsPopup.style.left = `${rect.left}px`;
+// Hover-intent delay: dropdowns only open if the cursor lingers on the
+// button. Prevents stray mouse passes (e.g. moving back into the window)
+// from popping menus open.
+const HOVER_INTENT_MS = 300;
+
+// ---- tab bar (inline, toggled by the tabs button) ----
+function toggleTabBar() {
+  if (tabBar.classList.contains('open')) hideTabBar();
+  else showTabBar();
 }
-function scheduleHideTabsPopup() { tabsHoverTimer = window.setTimeout(hideTabsPopup, 150); }
-function cancelHideTabsPopup() { if (tabsHoverTimer) window.clearTimeout(tabsHoverTimer); }
-function hideTabsPopup() { tabsPopup.hidden = true; }
+function showTabBar() {
+  tabBar.classList.add('open');
+  tabsBtn.classList.add('active');
+  renderTabBar();
+}
+function hideTabBar() {
+  tabBar.classList.remove('open');
+  tabsBtn.classList.remove('active');
+  hideOverflowPopup();
+}
+// Re-render the chips (e.g. after a switch/add/close) only while the bar is open.
+function refreshTabBar() {
+  if (tabBar.classList.contains('open')) renderTabBar();
+}
+
+const TAB_GAP = 4;          // must match .tab-strip `gap` in popup.css
+const OVERFLOW_MARKER = 22; // space reserved for the "from dropdown" double separator
+
+// Decide which tabs fully fit and which go to the overflow dropdown. Tabs are
+// never clipped — each either shows in full or is hidden. The active tab is
+// always kept visible; if it would have overflowed, it's surfaced at the end
+// of the bar with a double-separator marker so it's clearly "from the menu".
+function layoutTabs() {
+  if (!tabBar.classList.contains('open')) return;
+  const chips = Array.from(tabStrip.children) as HTMLElement[];
+  chips.forEach(c => {
+    c.classList.remove('tab-hidden', 'from-overflow');
+    c.querySelector('.tab-overflow-mark')?.remove();
+  });
+  if (chips.length === 0) { overflowBtn.hidden = true; return; }
+
+  const widths = chips.map(c => c.offsetWidth);
+  const total = widths.reduce((a, b) => a + b, 0) + TAB_GAP * (chips.length - 1);
+
+  // Everything fits with no chevron?
+  overflowBtn.hidden = true;
+  if (total <= tabStrip.clientWidth) return;
+
+  // Overflow exists: show the chevron, then recompute against the (now smaller)
+  // strip width. `leadingFit` returns how many leading chips fit in `avail`.
+  overflowBtn.hidden = false;
+  const W = tabStrip.clientWidth;
+  const leadingFit = (avail: number) => {
+    let used = 0, count = 0;
+    for (let i = 0; i < chips.length; i++) {
+      const need = (count > 0 ? TAB_GAP : 0) + widths[i];
+      if (used + need <= avail) { used += need; count++; } else break;
+    }
+    return count;
+  };
+
+  const activeIdx = Math.max(0, chips.findIndex(c => c.dataset.pageId === activePageId));
+  const naturalCount = leadingFit(W);
+
+  if (activeIdx <= naturalCount - 1) {
+    // Active fits naturally; hide everything past the prefix.
+    for (let i = naturalCount; i < chips.length; i++) chips[i].classList.add('tab-hidden');
+    return;
+  }
+
+  // Active would overflow: surface it at the end with a marker.
+  const reserve = widths[activeIdx] + TAB_GAP + OVERFLOW_MARKER;
+  const leadCount = leadingFit(Math.max(0, W - reserve));
+  for (let i = 0; i < chips.length; i++) {
+    if (i < leadCount || i === activeIdx) continue;
+    chips[i].classList.add('tab-hidden');
+  }
+  if (leadCount > 0) {
+    const active = chips[activeIdx];
+    active.classList.add('from-overflow');
+    const mark = document.createElement('span');
+    mark.className = 'tab-overflow-mark';
+    active.insertBefore(mark, active.firstChild);
+  }
+}
+
+function buildOverflowList() {
+  overflowPopup.innerHTML = '';
+  const hidden = (Array.from(tabStrip.children) as HTMLElement[])
+    .filter(c => c.classList.contains('tab-hidden'));
+  if (hidden.length === 0) {
+    overflowPopup.innerHTML = `<div class="vars-empty">No hidden tabs</div>`;
+    return;
+  }
+  hidden.forEach((chip) => {
+    const id = chip.dataset.pageId!;
+    const page = pages.find(p => p.id === id);
+    if (!page) return;
+    const row = document.createElement('div');
+    row.className = 'ov-row';
+
+    const name = document.createElement('span');
+    name.className = 'ov-name';
+    name.textContent = page.title || 'Tab';
+
+    const close = document.createElement('span');
+    close.className = 'ov-close';
+    close.textContent = '×';
+    close.title = 'Close tab';
+    close.onclick = (e) => { e.stopPropagation(); closeTab(id); refreshOverflowPopup(); };
+
+    row.appendChild(name);
+    row.appendChild(close);
+    row.onclick = () => { switchTab(id); hideOverflowPopup(); };
+    row.oncontextmenu = (e) => {
+      e.preventDefault();
+      cancelHideOverflow();   // keep the dropdown open behind the context menu
+      showTabContextMenu(id, e.clientX, e.clientY);
+    };
+    overflowPopup.appendChild(row);
+  });
+}
+// Keep an open dropdown in sync after a close (rebuild, or dismiss if empty).
+function refreshOverflowPopup() {
+  if (overflowPopup.hidden || reorderMode) return;
+  if (overflowBtn.hidden) hideOverflowPopup();
+  else buildOverflowList();
+}
+// Right-align the popup under the chevron (or the + button if the chevron is
+// hidden — e.g. Reorder invoked when nothing overflows), clamped to the window.
+function positionOverflowPopup() {
+  const anchor = overflowBtn.hidden ? tabAddBtn : overflowBtn;
+  const rect = anchor.getBoundingClientRect();
+  const left = Math.max(8, rect.right - overflowPopup.offsetWidth);
+  overflowPopup.style.top = `${rect.bottom + 4}px`;
+  overflowPopup.style.left = `${left}px`;
+}
+function showOverflowPopup() {
+  if (overflowBtn.hidden || reorderMode) return;
+  buildOverflowList();
+  overflowPopup.hidden = false;
+  positionOverflowPopup();
+}
+function hideOverflowPopup() {
+  if (reorderMode) return;   // reorder mode is dismissed only via Done / Esc
+  overflowPopup.hidden = true;
+}
+function toggleOverflowPopup() {
+  if (overflowPopup.hidden) showOverflowPopup(); else hideOverflowPopup();
+}
+function scheduleHideOverflow() { overflowHideTimer = window.setTimeout(maybeHideOverflow, 180); }
+function cancelHideOverflow() { if (overflowHideTimer) window.clearTimeout(overflowHideTimer); }
+// Don't auto-hide the dropdown while its right-click menu or reorder mode is up.
+function maybeHideOverflow() {
+  if (!contextMenu.hidden || reorderMode) return;
+  hideOverflowPopup();
+}
+
+// ---- reorder mode: drag ALL tabs into a new order, commit on Done ----
+function enterReorderMode() {
+  reorderMode = true;
+  hideTabContextMenu();
+  buildReorderList();
+  overflowPopup.hidden = false;
+  positionOverflowPopup();
+}
+function exitReorderMode(commit: boolean) {
+  if (commit) commitReorderFromList();
+  reorderMode = false;
+  overflowPopup.hidden = true;
+  renderTabBar();
+}
+function buildReorderList() {
+  overflowPopup.innerHTML = '';
+  const head = document.createElement('div');
+  head.className = 'ov-reorder-head';
+  const label = document.createElement('span');
+  label.textContent = 'Drag to reorder';
+  const done = document.createElement('button');
+  done.className = 'ov-done';
+  done.textContent = 'Done';
+  done.onclick = () => exitReorderMode(true);
+  head.appendChild(label);
+  head.appendChild(done);
+  overflowPopup.appendChild(head);
+
+  pages.forEach((page) => {
+    const row = document.createElement('div');
+    row.className = 'reorder-row' + (page.id === activePageId ? ' active' : '');
+    row.dataset.pageId = page.id;
+    row.draggable = true;
+
+    const handle = document.createElement('span');
+    handle.className = 'reorder-handle';
+    handle.textContent = '⠿'; // ⠿ braille dots = drag grip
+    const name = document.createElement('span');
+    name.className = 'reorder-name';
+    name.textContent = page.title || 'Tab';
+    row.appendChild(handle);
+    row.appendChild(name);
+
+    row.addEventListener('dragstart', (e) => {
+      row.classList.add('dragging');
+      if (e.dataTransfer) {
+        e.dataTransfer.effectAllowed = 'move';
+        e.dataTransfer.setData('text/plain', page.id);
+      }
+    });
+    row.addEventListener('dragend', () => row.classList.remove('dragging'));
+    row.addEventListener('dragover', (e) => {
+      e.preventDefault();
+      const dragging = overflowPopup.querySelector('.reorder-row.dragging') as HTMLElement | null;
+      if (!dragging || dragging === row) return;
+      const r = row.getBoundingClientRect();
+      const after = e.clientY > r.top + r.height / 2;
+      if (after) row.after(dragging); else row.before(dragging);
+    });
+    overflowPopup.appendChild(row);
+  });
+}
+function commitReorderFromList() {
+  const ids = (Array.from(overflowPopup.querySelectorAll('.reorder-row')) as HTMLElement[])
+    .map(r => r.dataset.pageId);
+  const reordered: Page[] = [];
+  ids.forEach((id) => { const p = pages.find(pp => pp.id === id); if (p) reordered.push(p); });
+  if (reordered.length === pages.length) {
+    pages.splice(0, pages.length, ...reordered);
+    window.mathPopup.setSettings({ pages, activePageId, closedPages });
+  }
+}
+
+// Rebuild the `pages` order from the chips' DOM order after a drag-reorder.
+function commitTabOrderFromDom() {
+  const ids = (Array.from(tabStrip.querySelectorAll('.tab-chip')) as HTMLElement[])
+    .map(c => c.dataset.pageId);
+  const reordered: Page[] = [];
+  ids.forEach((id) => { const p = pages.find(pp => pp.id === id); if (p) reordered.push(p); });
+  if (reordered.length === pages.length) {
+    pages.splice(0, pages.length, ...reordered);
+    window.mathPopup.setSettings({ pages, activePageId, closedPages });
+  }
+  renderTabBar();
+}
 
 function showArchivePopup() {
+  cancelShowArchivePopup();
   if (archiveHoverTimer) window.clearTimeout(archiveHoverTimer);
   renderArchiveMenu();
   archivePopup.hidden = false;
@@ -506,93 +896,173 @@ function showArchivePopup() {
   archivePopup.style.top = `${rect.bottom + 4}px`;
   archivePopup.style.left = `${rect.left}px`;
 }
+function scheduleShowArchivePopup() {
+  cancelShowArchivePopup();
+  archiveShowTimer = window.setTimeout(showArchivePopup, HOVER_INTENT_MS);
+}
+function cancelShowArchivePopup() {
+  if (archiveShowTimer) { window.clearTimeout(archiveShowTimer); archiveShowTimer = null; }
+}
 function scheduleHideArchivePopup() { archiveHoverTimer = window.setTimeout(hideArchivePopup, 150); }
 function cancelHideArchivePopup() { if (archiveHoverTimer) window.clearTimeout(archiveHoverTimer); }
 function hideArchivePopup() { archivePopup.hidden = true; }
 
-function renderTabsMenu() {
-  tabsPopup.innerHTML = '';
+function renderTabBar() {
+  tabStrip.innerHTML = '';
   pages.forEach((page, index) => {
-    const row = document.createElement('div');
-    row.className = 'vars-row' + (page.id === activePageId ? ' active' : '');
-    row.style.cursor = 'pointer';
-    row.onclick = (e) => {
-      // Don't trigger if clicking inside the input
+    const chip = document.createElement('div');
+    chip.className = 'tab-chip' + (page.id === activePageId ? ' active' : '');
+    chip.dataset.pageId = page.id;
+    chip.draggable = true;
+    const label = page.title || `Page ${index + 1}`;
+    chip.title = label;
+    chip.onclick = (e) => {
+      // Don't switch if interacting with the inline rename input
       if ((e.target as HTMLElement).tagName === 'INPUT') return;
-      switchTab(page.id); 
-      hideTabsPopup(); 
-    };
-    
-    const titleSpan = document.createElement('span');
-    titleSpan.className = 'vars-name';
-    titleSpan.textContent = page.title || `Page ${index + 1}`;
-    
-    const controls = document.createElement('div');
-    controls.style.display = 'flex';
-    controls.style.gap = '4px';
-    
-    const editBtn = document.createElement('span');
-    editBtn.className = 'vars-val';
-    editBtn.textContent = '✏️';
-    editBtn.style.cursor = 'pointer';
-    editBtn.onclick = (e) => {
-      e.stopPropagation();
-      const input = document.createElement('input');
-      input.type = 'text';
-      input.className = 'tab-rename-input';
-      input.maxLength = 15;
-      input.value = page.title;
-      
-      const saveName = () => {
-        const val = input.value.trim();
-        if (val) {
-          page.title = val;
-          window.mathPopup.setSettings({ pages, activePageId, closedPages });
-          updatePageIndicator();
-        }
-        renderTabsMenu();
-      };
-      
-      input.onkeydown = (e2) => {
-        if (e2.key === 'Enter') {
-          e2.preventDefault();
-          saveName();
-        }
-      };
-      input.onblur = saveName;
-      
-      row.replaceChild(input, titleSpan);
-      input.focus();
+      switchTab(page.id);
     };
 
+    // ---- drag to reorder ----
+    chip.addEventListener('dragstart', (e) => {
+      dragSrcId = page.id;
+      chip.classList.add('dragging');
+      tabBar.classList.add('reordering');
+      hideOverflowPopup();
+      if (e.dataTransfer) {
+        e.dataTransfer.effectAllowed = 'move';
+        e.dataTransfer.setData('text/plain', page.id);
+      }
+    });
+    chip.addEventListener('dragend', () => {
+      chip.classList.remove('dragging');
+      tabBar.classList.remove('reordering');
+      dragSrcId = null;
+      commitTabOrderFromDom();
+    });
+    chip.addEventListener('dragover', (e) => {
+      e.preventDefault();
+      if (e.dataTransfer) e.dataTransfer.dropEffect = 'move';
+      const dragging = tabStrip.querySelector('.tab-chip.dragging') as HTMLElement | null;
+      if (!dragging || dragging === chip) return;
+      // Don't reorder against hidden or the surfaced-from-overflow chip.
+      if (chip.classList.contains('tab-hidden') || chip.classList.contains('from-overflow')) return;
+      const r = chip.getBoundingClientRect();
+      const after = e.clientX > r.left + r.width / 2;
+      if (after) chip.after(dragging); else chip.before(dragging);
+    });
+
+    // Right-click a tab for Rename / Close.
+    chip.addEventListener('contextmenu', (e) => {
+      e.preventDefault();
+      showTabContextMenu(page.id, e.clientX, e.clientY);
+    });
+
+    const nameSpan = document.createElement('span');
+    nameSpan.className = 'tab-chip-name';
+    nameSpan.textContent = label;
+
+    // close (×) — always visible, like a regular browser tab
     const closeBtn = document.createElement('span');
-    closeBtn.className = 'vars-val';
+    closeBtn.className = 'tab-chip-close';
     closeBtn.textContent = '×';
-    closeBtn.style.cursor = 'pointer';
+    closeBtn.title = 'Close tab';
     closeBtn.onclick = (e) => {
       e.stopPropagation();
       closeTab(page.id);
-      renderTabsMenu();
     };
-    
-    controls.appendChild(editBtn);
-    controls.appendChild(closeBtn);
-    row.appendChild(titleSpan);
-    row.appendChild(controls);
-    tabsPopup.appendChild(row);
+
+    chip.appendChild(nameSpan);
+    chip.appendChild(closeBtn);
+    tabStrip.appendChild(chip);
   });
-  
-  if (pages.length < 99) {
-    const footer = document.createElement('div');
-    footer.className = 'popup-footer';
-    const addBtn = document.createElement('button');
-    addBtn.className = 'popup-btn';
-    addBtn.textContent = '+ New Tab';
-    addBtn.onclick = () => { addTab(); hideTabsPopup(); };
-    footer.appendChild(addBtn);
-    tabsPopup.appendChild(footer);
-  }
+
+  layoutTabs();
 }
+
+// Turn a tab's name into an inline text input (Enter/blur saves, Esc cancels).
+// Used by both the right-click "Rename" item and the Ctrl+L shortcut.
+function startRename(pageId: string) {
+  if (!tabBar.classList.contains('open')) showTabBar();
+  hideOverflowPopup();
+  let chip = tabStrip.querySelector(
+    `.tab-chip[data-page-id="${pageId}"]`) as HTMLElement | null;
+  // If the tab is currently in the overflow dropdown, switch to it first so it
+  // gets surfaced into the bar, then rename it there.
+  if (!chip || chip.classList.contains('tab-hidden')) {
+    switchTab(pageId);
+    chip = tabStrip.querySelector(
+      `.tab-chip[data-page-id="${pageId}"]`) as HTMLElement | null;
+  }
+  const page = pages.find(p => p.id === pageId);
+  const nameSpan = chip?.querySelector('.tab-chip-name') as HTMLElement | null;
+  if (!chip || !page || !nameSpan) return;
+
+  chip.draggable = false; // let the user select text in the input
+  const input = document.createElement('input');
+  input.type = 'text';
+  input.className = 'tab-rename-input';
+  input.maxLength = 15;
+  input.value = page.title;
+
+  const saveName = () => {
+    const val = input.value.trim();
+    if (val) {
+      page.title = val;
+      window.mathPopup.setSettings({ pages, activePageId, closedPages });
+      updatePageIndicator();
+    }
+    renderTabBar();
+  };
+
+  input.onkeydown = (e2) => {
+    if (e2.key === 'Enter') { e2.preventDefault(); saveName(); }
+    else if (e2.key === 'Escape') { e2.preventDefault(); renderTabBar(); }
+  };
+  input.onblur = saveName;
+
+  chip.replaceChild(input, nameSpan);
+  input.focus();
+  input.select();
+}
+
+function renameActiveTab() { startRename(activePageId); }
+
+// ---- tab right-click menu ----
+// pageId null = menu not tied to a specific tab (e.g. the overflow chevron):
+// only the "Reorder tabs" action is shown.
+function showTabContextMenu(pageId: string | null, x: number, y: number) {
+  contextMenu.innerHTML = '';
+  const addItem = (label: string, key: string, danger: boolean, onPick: () => void) => {
+    const item = document.createElement('div');
+    item.className = 'ctx-item' + (danger ? ' danger' : '');
+    const text = document.createElement('span');
+    text.textContent = label;
+    item.appendChild(text);
+    if (key) {
+      const k = document.createElement('span');
+      k.className = 'ctx-key';
+      k.textContent = key;
+      item.appendChild(k);
+    }
+    item.onclick = () => { hideTabContextMenu(); cancelHideOverflow(); onPick(); };
+    contextMenu.appendChild(item);
+  };
+  if (pageId) {
+    addItem('Rename', 'Ctrl+L', false, () => startRename(pageId));
+    addItem('Close tab', 'Ctrl+W', true, () => { closeTab(pageId); refreshOverflowPopup(); });
+  }
+  addItem('Reorder tabs', '', false, () => enterReorderMode());
+
+  contextMenu.hidden = false;
+  // Clamp the menu inside the window.
+  const mw = contextMenu.offsetWidth;
+  const mh = contextMenu.offsetHeight;
+  const left = Math.max(8, Math.min(x, window.innerWidth - mw - 8));
+  const top = Math.max(8, Math.min(y, window.innerHeight - mh - 8));
+  contextMenu.style.left = `${left}px`;
+  contextMenu.style.top = `${top}px`;
+}
+function hideTabContextMenu() { contextMenu.hidden = true; }
 
 function renderArchiveMenu() {
   archivePopup.innerHTML = '';
@@ -622,6 +1092,7 @@ function renderArchiveMenu() {
 
 function switchTab(id: string) {
   if (id === activePageId) return;
+  justClosedTab = false;
   const current = pages.find(p => p.id === activePageId);
   if (current) current.content = editor.value;
   
@@ -640,6 +1111,7 @@ function switchTab(id: string) {
 
 function addTab() {
   if (pages.length >= 99) return;
+  justClosedTab = false;
   const current = pages.find(p => p.id === activePageId);
   if (current) current.content = editor.value;
   
@@ -683,13 +1155,16 @@ function closeTab(id: string) {
   
   applyMode(next.mode);
   window.mathPopup.setSettings({ pages, activePageId, closedPages });
-  
+
   updatePageIndicator();
   render();
   editor.focus();
+  // Mark for one-shot Ctrl+Z restore (cleared on any edit/navigation).
+  justClosedTab = true;
 }
 
 function restoreTab(closedIndex: number) {
+  justClosedTab = false;
   const page = closedPages.splice(closedIndex, 1)[0];
   const current = pages.find(p => p.id === activePageId);
   if (current) current.content = editor.value;
@@ -709,7 +1184,7 @@ function restoreTab(closedIndex: number) {
 }
 
 function onKeyDown(e: KeyboardEvent) {
-  // Ctrl+T (new tab) and Ctrl+W (close tab)
+  // Ctrl+T (new tab), Ctrl+W (close tab), Ctrl+L (rename current tab)
   if (e.ctrlKey && !e.altKey && !e.metaKey && !e.shiftKey) {
     if (e.key === 't' || e.key === 'T') {
       e.preventDefault();
@@ -719,6 +1194,11 @@ function onKeyDown(e: KeyboardEvent) {
     if (e.key === 'w' || e.key === 'W') {
       e.preventDefault();
       closeTab(activePageId);
+      return;
+    }
+    if (e.key === 'l' || e.key === 'L') {
+      e.preventDefault();
+      renameActiveTab();
       return;
     }
   }
@@ -732,6 +1212,16 @@ function onKeyDown(e: KeyboardEvent) {
     if (nextIndex < 0) nextIndex = pages.length - 1;
     if (nextIndex >= pages.length) nextIndex = 0;
     switchTab(pages[nextIndex].id);
+    return;
+  }
+
+  // Ctrl+Z immediately after closing a tab restores it (one-shot), instead of
+  // undoing text. The flag is cleared by any edit/navigation, so this only
+  // fires when the close was the very last action.
+  if ((e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey &&
+      (e.key === 'z' || e.key === 'Z') && justClosedTab && closedPages.length > 0) {
+    e.preventDefault();
+    restoreTab(0);
     return;
   }
 
@@ -779,7 +1269,8 @@ function onKeyDown(e: KeyboardEvent) {
     e.preventDefault();
     copyAsMarkdown();
   }
-  // Esc: hide window (only if no menu is open — the menu intercepts above)
+  // Esc: hide window. (Tab popups/reorder are handled by a capture-phase
+  // Escape listener in bindEvents that runs before this and stops propagation.)
   if (e.key === 'Escape') {
     window.mathPopup.hidePopup();
   }
@@ -1982,7 +2473,19 @@ function renderVarsPopup() {
   });
 }
 
+let varsShowTimer: number | null = null;
+
+function scheduleShowVarsPopup() {
+  cancelShowVarsPopup();
+  varsShowTimer = window.setTimeout(showVarsPopup, HOVER_INTENT_MS);
+}
+
+function cancelShowVarsPopup() {
+  if (varsShowTimer) { window.clearTimeout(varsShowTimer); varsShowTimer = null; }
+}
+
 function showVarsPopup() {
+  cancelShowVarsPopup();
   cancelHideVarsPopup();
   renderVarsPopup();
   // Show off-screen first to measure for clamping.

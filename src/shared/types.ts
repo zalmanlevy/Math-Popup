@@ -24,10 +24,16 @@ export interface Settings {
   noteContent: string;            // last saved note text
   alwaysOnTop: boolean;           // pin window above other apps
   theme: ThemePref;               // 'system' follows OS, otherwise forced
+  zoom: number;                   // current popup zoom factor (1.0 = 100%)
+  zoomDefault: number;            // user's preferred default; Ctrl+0 returns here
   pages?: Page[];
   activePageId?: string;
   closedPages?: Page[];
 }
+
+export const ZOOM_MIN = 0.5;
+export const ZOOM_MAX = 2.0;
+export const ZOOM_STEP = 0.1;
 
 export const DEFAULT_SETTINGS: Settings = {
   mode: 'math',
@@ -43,5 +49,7 @@ export const DEFAULT_SETTINGS: Settings = {
   decimals: 2,
   noteContent: '',
   alwaysOnTop: false,
-  theme: 'system'
+  theme: 'system',
+  zoom: 1.0,
+  zoomDefault: 1.0
 };

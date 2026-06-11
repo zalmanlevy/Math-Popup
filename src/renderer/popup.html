@@ -22,10 +22,18 @@
       <button id="open-settings" title="Settings" class="icon-btn">⚙</button>
       <button id="close-window" title="Close" class="icon-btn close">×</button>
     </div>
-    <div id="tabs-popup" class="vars-popup" hidden></div>
     <div id="archive-popup" class="vars-popup" hidden></div>
     <div id="vars-popup" class="vars-popup" hidden></div>
   </header>
+  <nav id="tab-bar" class="tab-bar" aria-label="Open tabs">
+    <div id="tab-strip" class="tab-strip"></div>
+    <button id="tab-overflow-btn" class="tab-overflow-btn" title="More tabs" aria-label="More tabs" hidden>
+      <svg viewBox="0 0 12 12" width="11" height="11" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M2.5 4.5 L6 8 L9.5 4.5"/></svg>
+    </button>
+    <button id="tab-add-btn" class="tab-bar-add" title="New tab" aria-label="New tab">+</button>
+  </nav>
+  <div id="tab-overflow-popup" class="vars-popup tab-overflow-popup" hidden></div>
+  <div id="tab-context-menu" class="tab-context-menu" hidden></div>
   <main class="editor-shell">
     <div id="line-gutter" class="line-gutter" aria-hidden="true"></div>
     <div class="editor-stack">
@@ -46,6 +54,7 @@
   <div id="hover-tooltip" class="hover-tooltip" hidden></div>
   <footer class="status-bar">
     <span id="status-msg" class="status-msg">Ready</span>
+    <span id="zoom-indicator" class="hint zoom-indicator" hidden>100%</span>
     <span id="page-indicator" class="hint">Page 1</span>
   </footer>
   <script src="popup.js"></script>

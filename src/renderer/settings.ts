@@ -1,10 +1,12 @@
 import type { Settings, Suffix, ThemePref } from '../shared/types';
 import { DEFAULT_SETTINGS } from '../shared/types';
+import type { UpdateState } from '../main/preload';
 
 const launchAtStartupEl = document.getElementById('launch-at-startup') as HTMLInputElement;
 const autoFormatEl = document.getElementById('auto-format') as HTMLInputElement;
 const expandSuffixesEl = document.getElementById('expand-suffixes') as HTMLInputElement;
 const decimalsEl = document.getElementById('decimals') as HTMLInputElement;
+const zoomDefaultEl = document.getElementById('zoom-default') as HTMLInputElement;
 const tableBody = document.querySelector('#suffix-table tbody') as HTMLTableSectionElement;
 const addBtn = document.getElementById('add-suffix') as HTMLButtonElement;
 const resetBtn = document.getElementById('reset-defaults') as HTMLButtonElement;
@@ -14,6 +16,11 @@ const appVersionEl = document.getElementById('app-version') as HTMLSpanElement;
 const checkUpdatesBtn = document.getElementById('check-updates') as HTMLButtonElement;
 const installUpdateBtn = document.getElementById('install-update') as HTMLButtonElement;
 const updateStatusEl = document.getElementById('update-status') as HTMLSpanElement;
+const updateBanner = document.getElementById('update-banner') as HTMLDivElement;
+const updateBannerTitle = document.getElementById('update-banner-title') as HTMLDivElement;
+const updateBannerProgress = document.getElementById('update-banner-progress') as HTMLDivElement;
+const updateBannerProgressFill = document.getElementById('update-banner-progress-fill') as HTMLDivElement;
+const updateBannerAction = document.getElementById('update-banner-action') as HTMLButtonElement;
 
 let settings: Settings;
 let dirtyTimer: number | null = null;
@@ -27,6 +34,10 @@ async function init() {
   window.mathPopup.getAppVersion().then(version => {
     appVersionEl.textContent = version;
   });
+
+  // Reflect whatever update phase the app is already in (e.g. an update was
+  // downloaded earlier in this session before the user opened settings).
+  window.mathPopup.getUpdateState().then(applyUpdateState);
 }
 
 function applyTheme(theme: ThemePref) {
@@ -43,6 +54,7 @@ function hydrate() {
   autoFormatEl.checked = settings.autoFormatNumbers;
   expandSuffixesEl.checked = settings.expandSuffixesInEditor;
   decimalsEl.value = String(settings.decimals);
+  zoomDefaultEl.value = String(Math.round((settings.zoomDefault ?? 1) * 100));
   renderSuffixRows();
 }
 
@@ -54,6 +66,13 @@ function bind() {
     const v = Math.max(0, Math.min(10, Number(decimalsEl.value) || 2));
     decimalsEl.value = String(v);
     save({ decimals: v });
+  });
+  zoomDefaultEl.addEventListener('change', () => {
+    const pct = Math.max(50, Math.min(200, Number(zoomDefaultEl.value) || 100));
+    // Snap to the nearest 10% for cleaner ratios; the popup also clamps.
+    const snapped = Math.round(pct / 10) * 10;
+    zoomDefaultEl.value = String(snapped);
+    save({ zoomDefault: snapped / 100 });
   });
   addBtn.addEventListener('click', () => {
     settings.suffixes = [...settings.suffixes, { symbol: '', multiplier: 1, caseSensitive: false }];
@@ -89,26 +108,81 @@ function bind() {
     window.mathPopup.installUpdate();
   });
 
-  window.mathPopup.onUpdateStatus((status: string) => {
-    if (status === 'checking') {
-      updateStatusEl.textContent = 'Checking for updates...';
-    } else if (status === 'available') {
-      updateStatusEl.textContent = 'Downloading update...';
-    } else if (status === 'not-available') {
-      updateStatusEl.textContent = 'App is up to date.';
-      checkUpdatesBtn.disabled = false;
-    } else if (status.startsWith('downloading:')) {
-      const percent = status.split(':')[1];
-      updateStatusEl.textContent = `Downloading (${percent}%)...`;
-    } else if (status === 'downloaded') {
-      updateStatusEl.textContent = 'Ready to install.';
-      checkUpdatesBtn.style.display = 'none';
-      installUpdateBtn.style.display = 'block';
-    } else if (status.startsWith('error:')) {
-      updateStatusEl.textContent = 'Failed: ' + status.substring(6);
-      checkUpdatesBtn.disabled = false;
-    }
+  updateBannerAction.addEventListener('click', () => {
+    // The banner only ever shows an actionable button in the 'downloaded'
+    // phase, so this always means "install & restart now".
+    updateBannerAction.disabled = true;
+    window.mathPopup.installUpdate();
   });
+
+  window.mathPopup.onUpdateState(applyUpdateState);
+}
+
+function applyUpdateState(state: UpdateState) {
+  // Banner: only shows for the three "something is happening" phases.
+  if (state.phase === 'available' || state.phase === 'downloading' || state.phase === 'downloaded') {
+    updateBanner.hidden = false;
+    if (state.phase === 'available') {
+      updateBannerTitle.textContent = state.version
+        ? `Update available (v${state.version}) — preparing download…`
+        : 'Update available — preparing download…';
+      updateBannerProgress.hidden = true;
+      updateBannerProgressFill.style.width = '0%';
+      updateBannerAction.hidden = true;
+    } else if (state.phase === 'downloading') {
+      const pct = Math.max(0, Math.min(100, state.percent ?? 0));
+      updateBannerTitle.textContent = `Downloading update — ${pct}%`;
+      updateBannerProgress.hidden = false;
+      updateBannerProgressFill.style.width = `${pct}%`;
+      updateBannerAction.hidden = true;
+    } else {
+      updateBannerTitle.textContent = state.version
+        ? `Update ready (v${state.version})`
+        : 'Update ready';
+      updateBannerProgress.hidden = true;
+      updateBannerProgressFill.style.width = '100%';
+      updateBannerAction.hidden = false;
+      updateBannerAction.disabled = false;
+      updateBannerAction.textContent = 'Restart & Install';
+    }
+  } else {
+    updateBanner.hidden = true;
+  }
+
+  // About row: keep the inline status/buttons in sync with the same state.
+  if (state.phase === 'checking') {
+    updateStatusEl.textContent = 'Checking for updates…';
+    checkUpdatesBtn.disabled = true;
+    installUpdateBtn.style.display = 'none';
+  } else if (state.phase === 'available') {
+    updateStatusEl.textContent = 'Update available — downloading…';
+    checkUpdatesBtn.style.display = 'none';
+    installUpdateBtn.style.display = 'none';
+  } else if (state.phase === 'downloading') {
+    updateStatusEl.textContent = `Downloading (${state.percent ?? 0}%)…`;
+    checkUpdatesBtn.style.display = 'none';
+    installUpdateBtn.style.display = 'none';
+  } else if (state.phase === 'downloaded') {
+    updateStatusEl.textContent = 'Ready to install.';
+    checkUpdatesBtn.style.display = 'none';
+    installUpdateBtn.style.display = '';
+    installUpdateBtn.disabled = false;
+  } else if (state.phase === 'not-available') {
+    updateStatusEl.textContent = 'App is up to date.';
+    checkUpdatesBtn.style.display = '';
+    checkUpdatesBtn.disabled = false;
+    installUpdateBtn.style.display = 'none';
+  } else if (state.phase === 'error') {
+    updateStatusEl.textContent = state.error ? `Failed: ${state.error}` : 'Update check failed.';
+    checkUpdatesBtn.style.display = '';
+    checkUpdatesBtn.disabled = false;
+    installUpdateBtn.style.display = 'none';
+  } else {
+    updateStatusEl.textContent = '';
+    checkUpdatesBtn.style.display = '';
+    checkUpdatesBtn.disabled = false;
+    installUpdateBtn.style.display = 'none';
+  }
 }
 
 function renderSuffixRows() {

@@ -204,11 +204,336 @@ body {
 .icon-btn.active {
   background: var(--accent-soft);
   color: var(--accent);
-  box-shadow: inset 0 0 0 1px var(--accent);
 }
 .icon-btn.active:hover {
   background: var(--accent-soft);
   color: var(--accent);
+}
+
+.icon-btn { position: relative; }
+.icon-btn.has-update::after {
+  content: "";
+  position: absolute;
+  top: 3px;
+  right: 3px;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--accent);
+  box-shadow: 0 0 0 1.5px var(--bg);
+  pointer-events: none;
+}
+
+/* ---------- tab bar (toggled by the tabs button) ---------- */
+.tab-bar {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  max-height: 0;
+  padding: 0 6px;
+  overflow: hidden;
+  background: var(--bg-elev);
+  border-bottom: 1px solid transparent;
+  opacity: 0;
+  -webkit-app-region: no-drag;
+  transition: max-height 170ms ease, opacity 130ms ease, border-color 170ms ease;
+}
+.tab-bar.open {
+  max-height: 30px;
+  opacity: 1;
+  border-bottom-color: var(--border);
+}
+
+/* the clipping strip that holds the chips; chevron + add stay pinned right */
+.tab-strip {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex: 1 1 auto;
+  min-width: 0;
+  height: 100%;
+  overflow: hidden;
+}
+
+/* a tab "chip" — browser style: name + an always-visible close (×).
+   Its height matches the bar so the active fill goes edge to edge. */
+.tab-chip {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 24px;
+  padding: 0 5px 0 10px;
+  border-radius: 6px;
+  font-size: 12px;
+  color: var(--text-soft);
+  cursor: pointer;
+  white-space: nowrap;
+  flex: 0 0 auto;
+  max-width: 170px;
+  transition: background 120ms ease, color 120ms ease;
+}
+.tab-chip:hover { background: var(--bg-soft); color: var(--text); }
+.tab-chip.active {
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-weight: 600;
+  border-radius: 7px 7px 0 0;   /* Chrome shape: rounded top, square bottom */
+}
+.tab-chip.dragging { opacity: 0.55; }
+.tab-chip.tab-hidden { display: none; }
+
+/* Chrome-style pill separator between tabs (hidden around active/hovered) */
+.tab-strip .tab-chip:not(:first-child)::before {
+  content: "";
+  position: absolute;
+  left: -3px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 2px;
+  height: 13px;
+  border-radius: 99px;
+  background: var(--border);
+  opacity: 1;
+  transition: opacity 120ms ease;
+  pointer-events: none;
+}
+.tab-strip .tab-chip:hover::before,
+.tab-strip .tab-chip:hover + .tab-chip::before,
+.tab-strip .tab-chip.active + .tab-chip::before,
+.tab-strip .tab-chip.dragging::before,
+.tab-strip .tab-chip.dragging + .tab-chip::before {
+  opacity: 0;
+}
+
+/* active tab bottom corners flare OUT and blend into the strip below via two
+   radial-masked "ears" — applies whether active naturally OR surfaced from the
+   dropdown. top:auto cancels the separator's top:50% so the ears sit at the
+   bottom corners (not floating in the middle). */
+.tab-strip .tab-chip.active::before,
+.tab-strip .tab-chip.active::after {
+  content: "";
+  position: absolute;
+  top: auto;
+  bottom: 0;
+  width: 7px;
+  height: 7px;
+  background: var(--accent-soft);
+  border-radius: 0;
+  opacity: 1;
+  transform: none;
+  transition: none;
+  pointer-events: none;
+}
+.tab-strip .tab-chip.active::before {
+  left: -7px;
+  -webkit-mask: radial-gradient(circle at top left, transparent 7px, #000 7.5px);
+          mask: radial-gradient(circle at top left, transparent 7px, #000 7.5px);
+}
+.tab-strip .tab-chip.active::after {
+  right: -7px;
+  -webkit-mask: radial-gradient(circle at top right, transparent 7px, #000 7.5px);
+          mask: radial-gradient(circle at top right, transparent 7px, #000 7.5px);
+}
+
+/* a tab surfaced from the overflow dropdown: extra left room + a double pill
+   marker ("| |") so it's clearly pulled in from the menu. The marker is a real
+   child element (not a pseudo) so its two pills are guaranteed equal and don't
+   collide with the active ears above. */
+.tab-chip.from-overflow { margin-left: 18px; }
+.tab-overflow-mark {
+  position: absolute;
+  left: -16px;
+  top: 0;
+  bottom: 0;
+  width: 7px;
+  pointer-events: none;
+}
+.tab-overflow-mark::before,
+.tab-overflow-mark::after {
+  content: "";
+  position: absolute;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 2px;
+  height: 13px;
+  border-radius: 99px;
+  background: var(--border);
+}
+.tab-overflow-mark::before { left: 0; }
+.tab-overflow-mark::after  { left: 5px; }
+
+.tab-chip-name {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+/* close (×) — always visible, like a regular browser tab */
+.tab-chip-close {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 17px;
+  height: 17px;
+  border-radius: 4px;
+  font-size: 14px;
+  line-height: 1;
+  flex: 0 0 auto;
+  color: var(--text-faint);
+  transition: background 100ms ease, color 100ms ease;
+}
+.tab-chip:hover .tab-chip-close { color: var(--text-soft); }
+.tab-chip.active .tab-chip-close { color: var(--accent); }
+.tab-chip-close:hover { background: var(--error-soft); color: var(--error); }
+
+/* overflow chevron + "+" new-tab button — both pinned, always visible */
+.tab-overflow-btn,
+.tab-bar-add {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 24px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-soft);
+  line-height: 1;
+  cursor: pointer;
+  flex: 0 0 auto;
+  -webkit-app-region: no-drag;
+  transition: background 120ms ease, color 120ms ease;
+}
+.tab-overflow-btn { width: 22px; }
+.tab-bar-add { width: 24px; font-size: 17px; }
+.tab-overflow-btn:hover,
+.tab-bar-add:hover { background: var(--bg-soft); color: var(--text); }
+.tab-overflow-btn[hidden] { display: none; }
+
+.tab-bar .tab-rename-input { width: 96px; }
+
+/* overflow popup — the list of clipped tabs */
+.tab-overflow-popup { min-width: 150px; }
+.tab-overflow-popup .ov-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 6px 5px 9px;
+  border-radius: 5px;
+  font-size: 12px;
+  color: var(--text);
+  white-space: nowrap;
+  cursor: pointer;
+  transition: background 100ms ease;
+}
+.tab-overflow-popup .ov-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.tab-overflow-popup .ov-close {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 17px;
+  height: 17px;
+  border-radius: 4px;
+  font-size: 14px;
+  line-height: 1;
+  flex: 0 0 auto;
+  color: var(--text-faint);
+  transition: background 100ms ease, color 100ms ease;
+}
+.tab-overflow-popup .ov-row:hover { background: var(--bg-soft); }
+.tab-overflow-popup .ov-row:hover .ov-close { color: var(--text-soft); }
+.tab-overflow-popup .ov-close:hover { background: var(--error-soft); color: var(--error); }
+
+/* reorder mode — drag ALL tabs into a new order, then click Done */
+.tab-overflow-popup .ov-reorder-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 2px 4px 6px;
+  margin-bottom: 2px;
+  border-bottom: 1px solid var(--border);
+  font-size: 11px;
+  color: var(--text-faint);
+}
+.tab-overflow-popup .ov-done {
+  border: none;
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-size: 11px;
+  font-weight: 600;
+  padding: 3px 12px;
+  border-radius: 5px;
+  cursor: pointer;
+  transition: background 100ms ease, color 100ms ease;
+}
+.tab-overflow-popup .ov-done:hover { background: var(--accent); color: #fff; }
+.reorder-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 8px;
+  border-radius: 5px;
+  font-size: 12px;
+  color: var(--text);
+  white-space: nowrap;
+  cursor: grab;
+  transition: background 100ms ease;
+}
+.reorder-row:hover { background: var(--bg-soft); }
+.reorder-row.active { color: var(--accent); font-weight: 600; }
+.reorder-row.dragging { opacity: 0.5; background: var(--bg-soft); }
+.reorder-handle {
+  flex: 0 0 auto;
+  color: var(--text-faint);
+  font-size: 13px;
+  line-height: 1;
+}
+.reorder-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* right-click context menu for a tab (Rename / Close) */
+.tab-context-menu {
+  position: fixed;
+  z-index: 70;
+  min-width: 132px;
+  padding: 4px;
+  background: var(--bg-elev);
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+  box-shadow: var(--shadow);
+  font-family: var(--font-ui);
+  font-size: 12px;
+}
+.tab-context-menu[hidden] { display: none; }
+.tab-context-menu .ctx-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  border-radius: 5px;
+  color: var(--text);
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background 100ms ease;
+}
+.tab-context-menu .ctx-item:hover { background: var(--bg-soft); }
+.tab-context-menu .ctx-item.danger:hover { background: var(--error-soft); color: var(--error); }
+.tab-context-menu .ctx-key {
+  margin-left: auto;
+  padding-left: 16px;
+  color: var(--text-faint);
+  font-size: 11px;
 }
 
 /* ---------- editor area ---------- */
@@ -686,6 +1011,21 @@ body.text-mode .result-gutter { display: none; }
 .status-msg.ok { color: var(--result); }
 .status-msg.err { color: var(--error); }
 .hint { color: var(--text-faint); }
+
+.zoom-indicator {
+  font-variant-numeric: tabular-nums;
+  font-size: 11px;
+  padding: 1px 6px;
+  border-radius: 4px;
+  background: var(--bg-soft);
+  color: var(--text-soft);
+  transition: opacity 200ms ease;
+}
+.zoom-indicator[hidden] { display: none; }
+.zoom-indicator.flash {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
 
 /* ---------- scrollbars (subtle) ---------- */
 ::-webkit-scrollbar { width: 8px; height: 8px; }

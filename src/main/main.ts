@@ -12,6 +12,27 @@ let popupWindow: BrowserWindow | null = null;
 let settingsWindow: BrowserWindow | null = null;
 let helpWindow: BrowserWindow | null = null;
 
+type UpdatePhase =
+  | 'idle'
+  | 'checking'
+  | 'available'
+  | 'downloading'
+  | 'downloaded'
+  | 'not-available'
+  | 'error';
+
+interface UpdateState {
+  phase: UpdatePhase;
+  percent?: number;
+  error?: string;
+  version?: string;
+}
+
+let updateState: UpdateState = { phase: 'idle' };
+
+const UPDATE_CHECK_INTERVAL_MS = 4 * 60 * 60 * 1000; // 4 hours
+const INITIAL_UPDATE_DELAY_MS = 30 * 1000; // 30 seconds after launch
+
 const ICON_PATH = join(__dirname, '..', 'assets', 'icon.png');
 const PRELOAD_PATH = join(__dirname, 'preload.js');
 const POPUP_HTML = join(__dirname, '..', 'renderer', 'popup.html');
@@ -180,10 +201,19 @@ function applyStartup(enabled: boolean) {
   if (process.platform === 'linux') return;
   const opts: Electron.Settings = { openAtLogin: enabled };
   if (process.platform === 'win32') {
-    // Use the Electron binary + our app dir + --hidden so the OS-launched
-    // instance only puts the tray icon up (no popup until the user clicks).
     opts.path = process.execPath;
-    opts.args = [app.getAppPath(), '--hidden'];
+    if (app.isPackaged) {
+      // Packaged: process.execPath is the app's exe; Electron resolves the
+      // bundled app from there, so only --hidden is needed.
+      opts.args = ['--hidden'];
+    } else {
+      // Dev: pass the app path so the electron binary knows what to load.
+      // Windows' Run registry key joins args with spaces *without* quoting
+      // them, so any space in the project path (e.g. "OneDrive\General
+      // Projects") would chop the path at the first space and produce a
+      // "Cannot find module" error on boot. Wrap it in quotes ourselves.
+      opts.args = [`"${app.getAppPath()}"`, '--hidden'];
+    }
   }
   app.setLoginItemSettings(opts);
 }
@@ -212,20 +242,8 @@ function registerIPC() {
   ipcMain.handle('help:open', () => openHelp());
 
   ipcMain.handle('app:getVersion', () => app.getVersion());
-  ipcMain.handle('update:check', () => {
-    // Only works in packaged app usually, but we can set it up to not fail in dev if we want, or just let it log.
-    if (app.isPackaged) {
-      autoUpdater.checkForUpdates().catch(err => {
-        if (settingsWindow && !settingsWindow.isDestroyed()) {
-          settingsWindow.webContents.send('update:status', `error:${err.message}`);
-        }
-      });
-    } else {
-      if (settingsWindow && !settingsWindow.isDestroyed()) {
-        settingsWindow.webContents.send('update:status', 'not-available'); // Simulate no update in dev
-      }
-    }
-  });
+  ipcMain.handle('update:getState', () => updateState);
+  ipcMain.handle('update:check', () => triggerUpdateCheck());
   ipcMain.handle('update:install', () => {
     if (app.isPackaged) {
       // isSilent = true, isForceRunAfter = true
@@ -236,20 +254,33 @@ function registerIPC() {
   autoUpdater.autoDownload = true;
   autoUpdater.autoInstallOnAppQuit = false;
 
-  const sendUpdateStatus = (status: string) => {
-    if (settingsWindow && !settingsWindow.isDestroyed()) {
-      settingsWindow.webContents.send('update:status', status);
-    }
-  };
-
-  autoUpdater.on('checking-for-update', () => sendUpdateStatus('checking'));
-  autoUpdater.on('update-available', () => sendUpdateStatus('available'));
-  autoUpdater.on('update-not-available', () => sendUpdateStatus('not-available'));
-  autoUpdater.on('error', (err) => sendUpdateStatus(`error:${err.message}`));
+  autoUpdater.on('checking-for-update', () => setUpdateState({ phase: 'checking' }));
+  autoUpdater.on('update-available', (info) => setUpdateState({ phase: 'available', version: info?.version }));
+  autoUpdater.on('update-not-available', () => setUpdateState({ phase: 'not-available' }));
+  autoUpdater.on('error', (err) => setUpdateState({ phase: 'error', error: err.message }));
   autoUpdater.on('download-progress', (progressObj) => {
-    sendUpdateStatus(`downloading:${Math.round(progressObj.percent)}`);
+    setUpdateState({ phase: 'downloading', percent: Math.round(progressObj.percent) });
   });
-  autoUpdater.on('update-downloaded', () => sendUpdateStatus('downloaded'));
+  autoUpdater.on('update-downloaded', (info) => setUpdateState({ phase: 'downloaded', version: info?.version }));
+}
+
+function setUpdateState(next: UpdateState) {
+  updateState = next;
+  for (const w of [popupWindow, settingsWindow]) {
+    if (w && !w.isDestroyed()) {
+      w.webContents.send('update:state', updateState);
+    }
+  }
+}
+
+function triggerUpdateCheck() {
+  if (!app.isPackaged) {
+    setUpdateState({ phase: 'not-available' });
+    return;
+  }
+  autoUpdater.checkForUpdates().catch(err => {
+    setUpdateState({ phase: 'error', error: err.message });
+  });
 }
 
 app.whenReady().then(() => {
@@ -268,6 +299,14 @@ app.whenReady().then(() => {
 
   // Optional global shortcut to toggle the popup. Ctrl+Alt+M.
   globalShortcut.register('Control+Alt+M', togglePopup);
+
+  // Update checks: a delayed first check (so launch isn't slowed) plus a
+  // recurring 4h interval. Gated to packaged builds — autoUpdater can't pull
+  // releases from the dev tree.
+  if (app.isPackaged) {
+    setTimeout(triggerUpdateCheck, INITIAL_UPDATE_DELAY_MS);
+    setInterval(triggerUpdateCheck, UPDATE_CHECK_INTERVAL_MS);
+  }
 
   // Ensure any target="_blank" links open in the user's default web browser
   app.on('web-contents-created', (_, contents) => {

@@ -215,3 +215,63 @@ footer {
   font-weight: 500;
 }
 .save-status.dirty { color: var(--text-soft); font-weight: 400; }
+
+.update-banner {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 12px;
+  margin: 0 0 18px;
+  background: var(--accent-soft);
+  border: 1px solid var(--accent);
+  border-radius: 8px;
+}
+.update-banner[hidden] { display: none; }
+.update-banner-icon {
+  flex: 0 0 auto;
+  width: 24px;
+  height: 24px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  background: var(--accent);
+  color: #fff;
+  font-size: 13px;
+  font-weight: 700;
+}
+.update-banner-body {
+  flex: 1;
+  min-width: 0;
+}
+.update-banner-title {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text);
+}
+.update-banner-progress {
+  margin-top: 6px;
+  height: 4px;
+  background: rgba(0, 0, 0, 0.08);
+  border-radius: 2px;
+  overflow: hidden;
+}
+:root[data-theme="dark"] .update-banner-progress { background: rgba(255, 255, 255, 0.12); }
+@media (prefers-color-scheme: dark) {
+  :root[data-theme="system"] .update-banner-progress { background: rgba(255, 255, 255, 0.12); }
+}
+.update-banner-progress-fill {
+  height: 100%;
+  width: 0%;
+  background: var(--accent);
+  transition: width 200ms ease;
+}
+.update-banner-action {
+  flex: 0 0 auto;
+  background: var(--accent);
+  color: #fff;
+  border-color: var(--accent);
+  font-weight: 500;
+}
+.update-banner-action:hover { background: var(--accent); filter: brightness(1.08); }
+.update-banner-action[hidden] { display: none; }

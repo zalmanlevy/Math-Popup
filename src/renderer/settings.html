@@ -10,6 +10,17 @@
     <h1>Settings</h1>
   </header>
   <main>
+    <div id="update-banner" class="update-banner" hidden>
+      <div class="update-banner-icon" aria-hidden="true">⬆</div>
+      <div class="update-banner-body">
+        <div id="update-banner-title" class="update-banner-title"></div>
+        <div id="update-banner-progress" class="update-banner-progress" hidden>
+          <div id="update-banner-progress-fill" class="update-banner-progress-fill"></div>
+        </div>
+      </div>
+      <button id="update-banner-action" type="button" class="btn update-banner-action" hidden></button>
+    </div>
+
     <section>
       <h2>Appearance</h2>
       <div class="row">
@@ -40,6 +51,10 @@
       <label class="row">
         <span>Max decimal places</span>
         <input id="decimals" type="number" min="0" max="10" step="1" title="Cap on decimals shown — integers display without a decimal point, fractions only show the digits they need up to this cap." />
+      </label>
+      <label class="row">
+        <span>Default zoom</span>
+        <input id="zoom-default" type="number" min="50" max="200" step="10" title="Starting zoom level for the popup. Ctrl+0 returns to this value. You can also zoom with Ctrl+scroll or Ctrl + / Ctrl -." />
       </label>
     </section>
 
