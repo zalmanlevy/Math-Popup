@@ -1412,7 +1412,18 @@ export function formatLineForEditor(line: string, suffixes: Suffix[], opts: FmtO
   // Don't format markdown header lines.
   if (/^\s*#{1,6}\s+/.test(line)) return { text: line };
 
-  let out = line;
+  // Numbers inside quotes are text, not values — never comma-ize or expand
+  // them. Split into quoted ("..."/'...') and unquoted spans (capturing group
+  // → quotes land on odd indices) and format only the unquoted spans.
+  const parts = line.split(/("[^"]*"|'[^']*')/);
+  const text = parts
+    .map((part, i) => (i % 2 === 1 ? part : formatUnquotedSpan(part, suffixes, opts)))
+    .join('');
+  return { text };
+}
+
+function formatUnquotedSpan(span: string, suffixes: Suffix[], opts: FmtOpts): string {
+  let out = span;
 
   // 0. Bare decimals get a leading zero: ".123" -> "0.123" when preceded by
   //    whitespace, an operator, opening paren, or the start of the line.
@@ -1447,7 +1458,7 @@ export function formatLineForEditor(line: string, suffixes: Suffix[], opts: FmtO
       (_m, lead, num) => `${lead}${commifyNumber(num.replace(/,/g, ''))}`);
   }
 
-  return { text: out };
+  return out;
 }
 
 function commifyNumber(numStr: string): string {
@@ -1563,33 +1574,32 @@ function layoutGutters() {
       const r = lastResults[i];
       if (!r) return `<div class="row empty" style="height:${h}px"></div>`;
       if (r.error) {
-        if (r.errorKind === 'reserved-x') {
-          // Custom hover tooltip only — no `title` attribute, otherwise the
-          // native OS tooltip stacks on top of our styled one.
-          const tip = escapeAttr(r.errorTooltip ?? X_RESERVED_TOOLTIP);
-          return `<div class="row link-error" style="height:${h}px" data-tooltip="${tip}">N/A</div>`;
+        // Mid-typing / incomplete expression → soft grey "N/A". Everything else
+        // is a genuine error → a muted (calm) error color, all consistent.
+        if (r.errorKind === 'incomplete') {
+          const tip = escapeAttr(r.errorTooltip ?? 'Incomplete expression — keep typing.');
+          return `<div class="row err-faint" style="height:${h}px" data-tooltip="${tip}">N/A</div>`;
         }
+        // Friendly labels keep their wording; real mistakes just say "error".
+        // Custom hover tooltip only (no `title`) so it doesn't stack with the OS one.
         if (r.errorKind === 'reserved-excel') {
           const tip = escapeAttr(r.errorTooltip ?? EXCEL_FORMULA_TOOLTIP);
-          return `<div class="row link-error excel" style="height:${h}px" data-tooltip="${tip}">Excel Formula</div>`;
-        }
-        if (r.errorKind === 'reserved-name') {
-          const tip = escapeAttr(r.errorTooltip ?? RESERVED_NAME_TOOLTIP);
-          return `<div class="row link-error" style="height:${h}px" data-tooltip="${tip}">Reserved</div>`;
-        }
-        if (r.errorKind === 'unquoted-string') {
-          const tip = escapeAttr(r.errorTooltip ?? UNQUOTED_STRING_TOOLTIP);
-          return `<div class="row error" style="height:${h}px" data-tooltip="${tip}">err</div>`;
+          return `<div class="row err-calm" style="height:${h}px" data-tooltip="${tip}">Excel Formula</div>`;
         }
         if (r.errorKind === 'duplicate-var') {
           const tip = escapeAttr(r.errorTooltip ?? DUPLICATE_VAR_TOOLTIP);
-          return `<div class="row link-error" style="height:${h}px" data-tooltip="${tip}">Duplicate</div>`;
+          return `<div class="row err-calm" style="height:${h}px" data-tooltip="${tip}">Duplicate</div>`;
         }
-        // Other general errors (parse errors, etc.): render as blank in the
-        // gutter. The line highlighter already shows a red underline/bg on
-        // the offending line, so an additional "err" pill is just noise
-        // while the user is mid-typing.
-        return `<div class="row empty" style="height:${h}px"></div>`;
+        if (r.errorKind === 'reserved-name') {
+          const tip = escapeAttr(r.errorTooltip ?? RESERVED_NAME_TOOLTIP);
+          return `<div class="row err-calm" style="height:${h}px" data-tooltip="${tip}">Reserved</div>`;
+        }
+        // reserved-x, unquoted-string (undefined name), and any general error
+        // all read as "error". unquoted-string keeps its explanatory tooltip.
+        let tip = r.errorTooltip ?? r.error ?? 'Error';
+        if (r.errorKind === 'reserved-x') tip = r.errorTooltip ?? X_RESERVED_TOOLTIP;
+        else if (r.errorKind === 'unquoted-string') tip = r.errorTooltip ?? UNQUOTED_STRING_TOOLTIP;
+        return `<div class="row err-calm" style="height:${h}px" data-tooltip="${escapeAttr(tip)}">error</div>`;
       }
       const txt = r.display ?? '';
       let cls = 'row';

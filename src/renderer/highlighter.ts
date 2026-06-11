@@ -148,11 +148,9 @@ function tokenizeMath(line: string, r: LineResult | undefined, ctx: HighlightCon
       }
     }
   }
-  let html = out.join('');
-  if (r?.error && r.errorKind !== 'reserved-x' && r.errorKind !== 'reserved-excel'
-      && r.errorKind !== 'reserved-name') {
-    html = `<span class="tk-error">${html}</span>`;
-  }
+  const html = out.join('');
+  // Errors are surfaced in the result column (see resultGutter rendering), not
+  // by red-highlighting/underlining the line in the editor.
   return highlightInlineMarkdownPreserveSpans(html);
 }
 

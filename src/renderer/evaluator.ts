@@ -95,7 +95,7 @@ export interface LineResult {
   stringValue?: string; // string result (e.g. IF returning "TRUE"/"FALSE")
   error?: string;      // short error message if eval failed (only set when no
                        //   stale fallback is available)
-  errorKind?: 'reserved-x' | 'reserved-excel' | 'reserved-name' | 'unquoted-string' | 'duplicate-var' | 'general';
+  errorKind?: 'reserved-x' | 'reserved-excel' | 'reserved-name' | 'unquoted-string' | 'duplicate-var' | 'incomplete' | 'general';
   errorTooltip?: string;  // longer message shown on hover for special errors
   varName?: string;    // assignment target, if any
   stale?: boolean;     // true when display/numeric is the previous render's
@@ -375,6 +375,12 @@ function evaluateLine(raw: string, index: number, ctx: PreprocessCtx): LineResul
 }
 
 function tryEvalExpression(raw: string, index: number, ctx: PreprocessCtx): LineResult {
+  // A line wholly wrapped in quotes is a text note (e.g. 'Invoice 1291, it's
+  // due 1.9') — ignore it entirely, blank result. Matching the OUTERMOST quotes
+  // means apostrophes inside don't end the note early.
+  if (wholeQuotedInner(raw) !== null) {
+    return { index, kind: 'text', raw, display: '' };
+  }
   // Strip currency / x / commas first when sniffing for math-like tokens, so
   // a line like "$50 x 2" is recognized.
   const sniff = raw.replace(CURRENCY_RE, '');
@@ -456,6 +462,25 @@ function computeExpression(
 
     // 0. Strip currency symbols entirely. They contribute no value.
     s = s.replace(CURRENCY_RE, '');
+
+    // 0b. Quoted text is an annotation/string, not math. Remove quoted segments
+    //     ("..." or '...') that sit at the TOP LEVEL (outside any parentheses)
+    //     so they're ignored in the calc — e.g. `5 * 2 '234'` -> `5 * 2`.
+    //     Quotes INSIDE parentheses are kept (function string args like
+    //     IF(x, "A", "B")). If the whole line was just a quoted string, treat
+    //     it as text (displayed verbatim, never comma-formatted).
+    {
+      // Whole expression wrapped in matching quotes → a string value (e.g.
+      // `note = 'it's a test'`). Match the OUTERMOST quotes so apostrophes
+      // inside don't end it early.
+      const inner = wholeQuotedInner(s);
+      if (inner !== null) return { stringValue: inner };
+      const q = stripTopLevelQuotes(s);
+      if (q.text.trim() === '') {
+        return q.removed.length === 1 ? { stringValue: q.removed[0] } : {};
+      }
+      s = q.text;
+    }
 
     // 1. Strip number commas (1,000 -> 1000).
     s = stripNumberCommas(s);
@@ -569,7 +594,12 @@ function computeExpression(
         errorTooltip: UNQUOTED_STRING_TOOLTIP
       };
     }
-    return { error: shortError(msg) };
+    // Incomplete expressions while mid-typing (trailing operator, unclosed
+    // paren, etc.) aren't "real" errors — flag them softly so they read calm.
+    if (/unexpected end of expression|parenthesis.*expected|value expected/i.test(msg)) {
+      return { error: 'incomplete', errorKind: 'incomplete' };
+    }
+    return { error: shortError(msg), errorKind: 'general' };
   }
 }
 
@@ -615,6 +645,66 @@ function shortError(msg: string): string {
   const idx = msg.indexOf('\n');
   const first = idx >= 0 ? msg.slice(0, idx) : msg;
   return first.length > 80 ? first.slice(0, 77) + '…' : first;
+}
+
+// If the whole (trimmed) string is wrapped in matching quotes, return its inner
+// content; otherwise null. Matches the OUTERMOST quotes, so internal apostrophes
+// (e.g. it's) don't terminate it early.
+function wholeQuotedInner(s: string): string | null {
+  const t = s.trim();
+  if (t.length >= 2 && (t[0] === '"' || t[0] === "'") && t[t.length - 1] === t[0]) {
+    return t.slice(1, -1);
+  }
+  return null;
+}
+
+// Remove quoted segments ("..." or '...') that sit at the top level (outside any
+// parentheses) — they're text annotations, not math. Quotes inside parentheses
+// are preserved so function string args (e.g. IF(x, "A", "B")) still work.
+// Returns the cleaned text plus the contents of each removed top-level quote.
+function stripTopLevelQuotes(s: string): { text: string; removed: string[] } {
+  let out = '';
+  const removed: string[] = [];
+  let depth = 0;
+  let i = 0;
+  while (i < s.length) {
+    const ch = s[i];
+    if (ch === '(') { depth++; out += ch; i++; continue; }
+    if (ch === ')') { depth = depth > 0 ? depth - 1 : 0; out += ch; i++; continue; }
+    // Only quotes OUTSIDE parentheses are annotations; quotes inside are kept
+    // (function string args like IF(x, "A", "B")).
+    if (depth === 0 && (ch === '"' || ch === "'")) {
+      // Outermost match: pair with the LAST same-type quote at depth 0 in the
+      // remainder, so inner quotes/apostrophes (e.g. it's) are absorbed and the
+      // whole annotation is ignored — letting you add math elsewhere on the line.
+      const close = lastQuoteAtDepth0(s, ch, i + 1);
+      if (close === -1) {
+        removed.push(s.slice(i + 1)); // unterminated → strip the rest
+        return { text: out, removed };
+      }
+      removed.push(s.slice(i + 1, close));
+      out += ' '; // keep tokens on either side separated
+      i = close + 1;
+      continue;
+    }
+    out += ch;
+    i++;
+  }
+  return { text: out, removed };
+}
+
+// Index of the LAST occurrence of quote char `q` at paren-depth 0 at/after
+// `from`, or -1 — so a quoted annotation pairs with its OUTERMOST quote.
+function lastQuoteAtDepth0(s: string, q: string, from: number): number {
+  let depth = 0;
+  let last = -1;
+  for (let j = from; j < s.length; j++) {
+    const c = s[j];
+    if (c === '(') depth++;
+    else if (c === ')') depth = depth > 0 ? depth - 1 : 0;
+    else if (c === q && depth === 0) last = j;
+  }
+  return last;
 }
 
 // Evaluate an arbitrary sub-expression (e.g. text the user dragged over within

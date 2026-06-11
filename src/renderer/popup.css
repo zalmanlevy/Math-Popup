@@ -599,6 +599,21 @@ body.text-mode .result-gutter { display: none; }
 .result-gutter .row.error[data-tooltip] {
   cursor: help;
 }
+/* Calm, standardized error styling in the result column: undefined names and
+   mid-typing/incomplete read as faint grey; genuine errors use a muted (not
+   aggressive) error color. Both are dotted-underlined "N/A". */
+.result-gutter .row.err-faint,
+.result-gutter .row.err-calm {
+  font-weight: 500;
+  text-decoration: underline dotted;
+  text-underline-offset: 2px;
+}
+.result-gutter .row.err-faint { color: var(--text-faint); }
+.result-gutter .row.err-calm { color: color-mix(in srgb, var(--error) 74%, var(--text-faint)); }
+.result-gutter .row.err-faint[data-tooltip],
+.result-gutter .row.err-calm[data-tooltip] {
+  cursor: help;
+}
 .result-gutter .row.stale {
   color: var(--result-stale);
   font-weight: 500;
@@ -719,7 +734,6 @@ body.text-mode .result-gutter { display: none; }
 .tk-paren { color: var(--text-faint); }
 .tk-lref { color: #0ea5e9; font-weight: 500; }
 .tk-comment { color: var(--text-faint); font-style: italic; }
-.tk-error { background: var(--error-bg); border-bottom: 1px dotted var(--error); }
 .tk-directive {
   color: #7c3aed;
   font-weight: 600;
