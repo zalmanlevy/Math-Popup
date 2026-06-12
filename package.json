@@ -65,7 +65,7 @@
       "createDesktopShortcut": true,
       "createStartMenuShortcut": true,
       "shortcutName": "Math Popup",
-      "artifactName": "Math-Popup-Setup-${version}.exe"
+      "artifactName": "Math-Popup-Setup.exe"
     },
     "portable": {
       "artifactName": "MathPopup-${version}-portable.exe"
