@@ -17,6 +17,7 @@ export interface Page {
 export interface Settings {
   mode: Mode;                     // 'math' = full evaluator + gutters; 'text' = plain notepad
   launchAtStartup: boolean;       // start with Windows; opens hidden in the tray
+  showTaskbarIcon: boolean;       // show the window in the Windows taskbar (so it can be pinned); off = tray-only
   suffixes: Suffix[];
   autoFormatNumbers: boolean;     // insert commas on space/operator
   expandSuffixesInEditor: boolean; // 1m -> 1,000,000 in textarea
@@ -38,6 +39,7 @@ export const ZOOM_STEP = 0.1;
 export const DEFAULT_SETTINGS: Settings = {
   mode: 'math',
   launchAtStartup: true,
+  showTaskbarIcon: false,
   suffixes: [
     { symbol: 'k', multiplier: 1_000, caseSensitive: false },
     { symbol: 'm', multiplier: 1_000_000, caseSensitive: false },

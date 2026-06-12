@@ -88,7 +88,7 @@ function createPopup() {
     backgroundColor: currentBg(),
     show: false,
     resizable: true,
-    skipTaskbar: true,
+    skipTaskbar: !settings.showTaskbarIcon,
     alwaysOnTop: settings.alwaysOnTop,
     icon: ICON_PATH,
     webPreferences: {
@@ -229,6 +229,12 @@ function registerIPC() {
       applyThemeSource(updated.theme);
       broadcastTheme();
     }
+    if (Object.prototype.hasOwnProperty.call(partial, 'showTaskbarIcon')) {
+      // Live-apply so the taskbar button appears/disappears without a restart.
+      if (popupWindow && !popupWindow.isDestroyed()) {
+        popupWindow.setSkipTaskbar(!updated.showTaskbarIcon);
+      }
+    }
     return updated;
   });
   ipcMain.handle('window:hide', () => {
@@ -284,6 +290,9 @@ function triggerUpdateCheck() {
 }
 
 app.whenReady().then(() => {
+  // Match the installer's appId so a taskbar button (when the user enables the
+  // taskbar icon) groups under the app's identity and pins to the right target.
+  if (process.platform === 'win32') app.setAppUserModelId('com.zalmanlevy.mathpopup');
   registerIPC();
   const initial = loadSettings();
   applyThemeSource(initial.theme);
