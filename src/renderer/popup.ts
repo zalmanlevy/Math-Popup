@@ -730,14 +730,20 @@ function layoutTabs() {
   const widths = chips.map(c => c.offsetWidth);
   const total = widths.reduce((a, b) => a + b, 0) + TAB_GAP * (chips.length - 1);
 
+  // The strip normally hugs its tabs so the "+" trails the last one. Make it fill
+  // the bar while we measure, so clientWidth reports the room available for tabs
+  // (not just the current content width). We collapse back to hug below.
+  tabBar.classList.add('tab-measuring');
+
   // Everything fits with no chevron?
   overflowBtn.hidden = true;
-  if (total <= tabStrip.clientWidth) return;
+  if (total <= tabStrip.clientWidth) { tabBar.classList.remove('tab-measuring'); return; }
 
   // Overflow exists: show the chevron, then recompute against the (now smaller)
   // strip width. `leadingFit` returns how many leading chips fit in `avail`.
   overflowBtn.hidden = false;
   const W = tabStrip.clientWidth;
+  tabBar.classList.remove('tab-measuring');   // measured; collapse so "+" hugs the last tab
   const leadingFit = (avail: number) => {
     let used = 0, count = 0;
     for (let i = 0; i < chips.length; i++) {

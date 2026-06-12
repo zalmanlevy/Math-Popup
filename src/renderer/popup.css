@@ -244,17 +244,21 @@ body {
   border-bottom-color: var(--border);
 }
 
-/* the clipping strip that holds the chips; chevron + add stay pinned right */
+/* the strip that holds the chips. It hugs its content (flex-grow 0) so the
+   chevron + "+" sit right after the last tab and slide right as tabs are added,
+   Chrome-style. layoutTabs() temporarily adds .tab-measuring to make the strip
+   fill the bar while it measures the room available for overflow. */
 .tab-strip {
   position: relative;
   display: flex;
   align-items: center;
   gap: 4px;
-  flex: 1 1 auto;
+  flex: 0 1 auto;
   min-width: 0;
   height: 100%;
   overflow: hidden;
 }
+.tab-bar.tab-measuring .tab-strip { flex-grow: 1; }
 
 /* a tab "chip" — browser style: name + an always-visible close (×).
    Its height matches the bar so the active fill goes edge to edge. */
@@ -388,7 +392,7 @@ body {
 .tab-chip.active .tab-chip-close { color: var(--accent); }
 .tab-chip-close:hover { background: var(--error-soft); color: var(--error); }
 
-/* overflow chevron + "+" new-tab button — both pinned, always visible */
+/* overflow chevron + "+" new-tab button — trail the last tab, always visible */
 .tab-overflow-btn,
 .tab-bar-add {
   display: inline-flex;
