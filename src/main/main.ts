@@ -1,5 +1,6 @@
 import { app, BrowserWindow, Tray, Menu, nativeImage, ipcMain, screen, globalShortcut, nativeTheme } from 'electron';
 import { join } from 'node:path';
+import { appendFileSync } from 'node:fs';
 import { loadSettings, saveSettings, flushSettings } from './store';
 import { Settings } from '../shared/types';
 import { autoUpdater } from 'electron-updater';
@@ -256,6 +257,23 @@ function registerIPC() {
       autoUpdater.quitAndInstall(true, true);
     }
   });
+
+  // Route electron-updater diagnostics to a file (userData/update.log) so an
+  // update failure — e.g. a locked file during the old-version uninstall — can
+  // be inspected after the fact instead of guessing.
+  const updateLogPath = join(app.getPath('userData'), 'update.log');
+  const logUpdate = (level: string, message: unknown) => {
+    try {
+      const text = typeof message === 'string' ? message : JSON.stringify(message);
+      appendFileSync(updateLogPath, `[${new Date().toISOString()}] ${level} ${text}\n`);
+    } catch { /* logging must never break an update */ }
+  };
+  autoUpdater.logger = {
+    info: (m: unknown) => logUpdate('INFO', m),
+    warn: (m: unknown) => logUpdate('WARN', m),
+    error: (m: unknown) => logUpdate('ERROR', m),
+    debug: (m: unknown) => logUpdate('DEBUG', m)
+  };
 
   autoUpdater.autoDownload = true;
   autoUpdater.autoInstallOnAppQuit = false;
