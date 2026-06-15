@@ -475,16 +475,10 @@ function bindEvents() {
   // Tabs: click the button to toggle the inline tab bar open/closed.
   tabsBtn.addEventListener('click', toggleTabBar);
   tabAddBtn.addEventListener('click', () => addTab());
-  // Overflow chevron: opens on hover or click, lists the clipped tabs.
-  overflowBtn.addEventListener('click', toggleOverflowPopup);
-  overflowBtn.addEventListener('mouseenter', () => { cancelHideOverflow(); showOverflowPopup(); });
-  overflowBtn.addEventListener('mouseleave', scheduleHideOverflow);
-  // Right-clicking the chevron offers "Reorder tabs".
-  overflowBtn.addEventListener('contextmenu', (e) => {
-    e.preventDefault();
-    cancelHideOverflow();
-    showTabContextMenu(null, e.clientX, e.clientY);
-  });
+  // Overflow chevron: opens on hover or click, lists the clipped tabs, and
+  // right-click offers "Reorder tabs". The in-between "⋯" marker shares these
+  // exact triggers (see wireOverflowTrigger).
+  wireOverflowTrigger(overflowBtn);
   overflowPopup.addEventListener('mouseenter', cancelHideOverflow);
   overflowPopup.addEventListener('mouseleave', scheduleHideOverflow);
   // Re-evaluate which tabs overflow when the window is resized.
@@ -1045,8 +1039,24 @@ const OVERFLOW_MARKER = 22; // space reserved for the "from dropdown" double sep
 // never clipped — each either shows in full or is hidden. The active tab is
 // always kept visible; if it would have overflowed, it's surfaced at the end
 // of the bar with a double-separator marker so it's clearly "from the menu".
+// The overflow chevron and the in-between "⋯" marker share triggers: hover opens
+// the hidden-tab list, click toggles it, right-click offers Reorder. stopProp
+// keeps the marker — which lives inside a tab chip — from also activating that tab.
+function wireOverflowTrigger(el: HTMLElement) {
+  el.addEventListener('click', (e) => { e.stopPropagation(); toggleOverflowPopup(); });
+  el.addEventListener('mouseenter', () => { cancelHideOverflow(); showOverflowPopup(); });
+  el.addEventListener('mouseleave', scheduleHideOverflow);
+  el.addEventListener('contextmenu', (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    cancelHideOverflow();
+    showTabContextMenu(null, e.clientX, e.clientY);
+  });
+}
+
 function layoutTabs() {
   if (!tabBar.classList.contains('open')) return;
+  hideTooltip();   // a relayout recreates the overflow marker; drop any tooltip anchored to the old one
   const chips = Array.from(tabStrip.children) as HTMLElement[];
   chips.forEach(c => {
     c.classList.remove('tab-hidden', 'from-overflow');
@@ -1086,6 +1096,7 @@ function layoutTabs() {
   if (activeIdx <= naturalCount - 1) {
     // Active fits naturally; hide everything past the prefix.
     for (let i = naturalCount; i < chips.length; i++) chips[i].classList.add('tab-hidden');
+    setOverflowCount();
     return;
   }
 
@@ -1101,8 +1112,31 @@ function layoutTabs() {
     active.classList.add('from-overflow');
     const mark = document.createElement('span');
     mark.className = 'tab-overflow-mark';
+    // Empty title suppresses the parent tab's native "name" tooltip from also
+    // popping up when the cursor is over the marker (it's a child of that tab).
+    mark.title = '';
+    // Informational only: hovering it explains there are hidden tabs here, using
+    // the shared styled tooltip with a delay so a quick pass doesn't trigger it.
+    mark.addEventListener('mouseenter', () => showTooltipHTML(mark,
+      `<div class="tip-title">There are extra tabs between here</div>` +
+      `<div>Open them from the menu on the right.</div>`, 500));
+    mark.addEventListener('mouseleave', hideTooltip);
     active.insertBefore(mark, active.firstChild);
   }
+  setOverflowCount();
+}
+
+// Show how many tabs are tucked away on the overflow chevron (it renders as a
+// "N ⌄" pill), so it's obvious there are more tabs hiding there. Only meaningful
+// when the chevron is visible, which is exactly when something overflows.
+function setOverflowCount() {
+  const n = (Array.from(tabStrip.children) as HTMLElement[])
+    .filter(c => c.classList.contains('tab-hidden')).length;
+  const countEl = overflowBtn.querySelector('.ov-count');
+  if (countEl) countEl.textContent = n > 0 ? String(n) : '';
+  const label = n === 1 ? '1 more tab' : `${n} more tabs`;
+  overflowBtn.title = label;
+  overflowBtn.setAttribute('aria-label', label);
 }
 
 function buildOverflowList() {

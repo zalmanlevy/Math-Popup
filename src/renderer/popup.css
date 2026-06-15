@@ -350,13 +350,17 @@ body {
    child element (not a pseudo) so its two pills are guaranteed equal and don't
    collide with the active ears above. */
 .tab-chip.from-overflow { margin-left: 18px; }
+/* Marker before a tab pulled in from the overflow: two small bars standing in
+   for the tabs hidden in between. The element is a wider invisible hit area (the
+   bars are the only visible part) so it's easy to hover; on hover it shows a
+   styled tooltip explaining what it is (wired in layoutTabs). */
 .tab-overflow-mark {
   position: absolute;
   left: -16px;
   top: 0;
   bottom: 0;
-  width: 7px;
-  pointer-events: none;
+  width: 16px;
+  cursor: help;
 }
 .tab-overflow-mark::before,
 .tab-overflow-mark::after {
@@ -413,11 +417,25 @@ body {
   -webkit-app-region: no-drag;
   transition: background 120ms ease, color 120ms ease;
 }
-.tab-overflow-btn { width: 22px; }
+/* Overflow chevron renders as a small accent pill showing how many tabs are
+   hidden (e.g. "3 ⌄"). It only appears when tabs overflow, so the count makes
+   its purpose unmistakable. */
+.tab-overflow-btn {
+  width: auto;
+  min-width: 34px;
+  gap: 2px;
+  padding: 0 7px 0 8px;
+  border-radius: 12px;
+  background: var(--bg-soft);
+  color: var(--text-soft);
+  font-size: 11px;
+  font-weight: 600;
+}
 .tab-bar-add { width: 24px; font-size: 17px; }
-.tab-overflow-btn:hover,
+.tab-overflow-btn:hover { background: var(--bg-soft); color: var(--text); filter: brightness(0.94); }
 .tab-bar-add:hover { background: var(--bg-soft); color: var(--text); }
 .tab-overflow-btn[hidden] { display: none; }
+.ov-count { line-height: 1; }
 
 .tab-bar .tab-rename-input { width: 96px; }
 
