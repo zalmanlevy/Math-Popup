@@ -1293,6 +1293,25 @@ function onKeyDown(e: KeyboardEvent) {
     if (handleMenuKey(e)) return;
   }
 
+  // Word-style list continuation in text mode: Enter after a "- " or "1. " item
+  // starts the next item (numbers auto-increment); Enter on an empty item ends
+  // the list. Plain Enter only — Shift+Enter stays a normal newline.
+  if (currentMode() === 'text' && e.key === 'Enter' &&
+      !e.ctrlKey && !e.shiftKey && !e.altKey && !e.metaKey &&
+      handleListContinuation()) {
+    e.preventDefault();
+    return;
+  }
+
+  // Tab / Shift+Tab indents or outdents list items in text mode (word-processor
+  // style). Falls through to default Tab when the line isn't a list item.
+  if (currentMode() === 'text' && e.key === 'Tab' &&
+      !e.ctrlKey && !e.altKey && !e.metaKey &&
+      handleListIndent(e.shiftKey)) {
+    e.preventDefault();
+    return;
+  }
+
   // Smart Tab: when the caret sits inside a number, jump past the number to
   // the trailing space (inserting one if missing) and re-run auto-format so
   // any commas are corrected. Math mode only.
@@ -1414,6 +1433,112 @@ function matchTrailingSuffix(text: string, pos: number): number {
     return sym.length;
   }
   return 0;
+}
+
+// ---- Word-style list markers (text mode) ----
+// Recognise a leading list marker: a "-", "*" or "+" bullet, or a number with a
+// "." or ")" delimiter. A real list item needs a space after the marker ("- x",
+// "1. ", "1) x"); the one exception is a bare "1." / "1)" (number + delimiter,
+// nothing else), which starts a numbered list. This keeps "-word", "*bold*" and
+// decimals like "1.5" from being treated as lists.
+interface ListMarker {
+  indent: string; bullet?: string; num?: string; delim?: string;
+  spaceAfter: string; content: string; markerLen: number;
+}
+function parseListLine(line: string): ListMarker | null {
+  const m = /^(\s*)(?:([-*+])|(\d+)([.)]))(\s*)(.*)$/.exec(line);
+  if (!m) return null;
+  const [, indent, bullet, num, delim, spaceAfter, content] = m;
+  const hasContent = content.trim().length > 0;
+  if (spaceAfter.length === 0 && !(num && !hasContent)) return null;
+  const markerLen = indent.length + (bullet ? bullet.length : num!.length + delim!.length) + spaceAfter.length;
+  return { indent, bullet, num, delim, spaceAfter, content, markerLen };
+}
+
+// Enter on a list item continues the list (numbers auto-increment, indentation
+// preserved); Enter on an empty item ("- " / "1. ") ends it by clearing the
+// marker. Returns true if it handled the keystroke (caller suppresses newline).
+function handleListContinuation(): boolean {
+  if (editor.selectionStart !== editor.selectionEnd) return false;   // selection: default Enter
+  const text = editor.value;
+  const caret = editor.selectionStart;
+  const lineStart = text.lastIndexOf('\n', caret - 1) + 1;
+  let lineEnd = text.indexOf('\n', caret);
+  if (lineEnd === -1) lineEnd = text.length;
+
+  const mk = parseListLine(text.slice(lineStart, lineEnd));
+  if (!mk) return false;
+  // Don't hijack Enter typed inside the leading whitespace or the marker itself.
+  if (caret < lineStart + mk.markerLen) return false;
+
+  const hasContent = mk.content.trim().length > 0;
+  const isEmpty = !hasContent && mk.spaceAfter.length > 0;   // "- " / "1. " with no text
+
+  captureForUndo();
+  if (isEmpty) {
+    // Clear the empty marker; keep the (now blank) line, caret at its start.
+    editor.value = text.slice(0, lineStart) + text.slice(lineEnd);
+    editor.selectionStart = editor.selectionEnd = lineStart;
+  } else {
+    const nextMarker = mk.bullet ? `${mk.bullet} ` : `${parseInt(mk.num!, 10) + 1}${mk.delim} `;
+    const insertion = `\n${mk.indent}${nextMarker}`;
+    editor.value = text.slice(0, caret) + insertion + text.slice(caret);
+    editor.selectionStart = editor.selectionEnd = caret + insertion.length;
+  }
+  previousText = editor.value;
+  scheduleSave();
+  render();
+  ensureCaretLineVisible();
+  return true;
+}
+
+// Tab / Shift+Tab on list line(s): indent / outdent by two spaces, like a word
+// processor. Operates on every list line the selection spans (or the caret's
+// line). Returns true if it handled the keystroke.
+const LIST_INDENT = '  ';
+function handleListIndent(outdent: boolean): boolean {
+  const text = editor.value;
+  const selStart = editor.selectionStart;
+  const selEnd = editor.selectionEnd;
+  const blockStart = text.lastIndexOf('\n', selStart - 1) + 1;
+  // A selection ending exactly at a line start shouldn't pull in the next line.
+  const endProbe = (selEnd > selStart && selEnd > 0 && text[selEnd - 1] === '\n') ? selEnd - 1 : selEnd;
+  let blockEnd = text.indexOf('\n', endProbe);
+  if (blockEnd === -1) blockEnd = text.length;
+
+  const original = text.slice(blockStart, blockEnd);
+  const lines = original.split('\n');
+  if (!lines.some(l => parseListLine(l))) return false;   // nothing list-like to indent
+
+  let firstShift = 0;   // change applied to the first line (for caret math)
+  const out = lines.map((l, i) => {
+    if (!parseListLine(l)) return l;
+    if (outdent) {
+      let r = 0;
+      if (l[0] === '\t') r = 1; else while (r < LIST_INDENT.length && l[r] === ' ') r++;
+      if (i === 0) firstShift = -r;
+      return l.slice(r);
+    }
+    if (i === 0) firstShift = LIST_INDENT.length;
+    return LIST_INDENT + l;
+  });
+  const newBlock = out.join('\n');
+  if (newBlock === original) return true;   // outdent past column 0 — swallow Tab, keep focus
+
+  commitTypingBurst();
+  captureForUndo();
+  editor.value = text.slice(0, blockStart) + newBlock + text.slice(blockEnd);
+  if (selStart === selEnd) {
+    editor.selectionStart = editor.selectionEnd = Math.max(blockStart, selStart + firstShift);
+  } else {
+    editor.selectionStart = blockStart;
+    editor.selectionEnd = blockStart + newBlock.length;
+  }
+  previousText = editor.value;
+  scheduleSave();
+  render();
+  ensureCaretLineVisible();
+  return true;
 }
 
 // ---- auto-format current line ----
