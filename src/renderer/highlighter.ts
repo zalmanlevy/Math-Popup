@@ -23,7 +23,7 @@ export interface HighlightContext {
   knownVariables: Set<string>; // names defined elsewhere in the note
 }
 
-export function highlightNote(text: string, lineResults: LineResult[], mode: Mode = 'math', activeToken?: ActiveToken | null): string {
+export function highlightNote(text: string, lineResults: LineResult[], lineModes: Mode[] = [], activeToken?: ActiveToken | null, caretLine = -1): string {
   const lines = text.split('\n');
   const knownVariables = new Set<string>();
   for (const r of lineResults) {
@@ -34,7 +34,8 @@ export function highlightNote(text: string, lineResults: LineResult[], mode: Mod
   return lines
     .map((line, i) => {
       const r = lineResults[i];
-      const tokens = tokenizeLine(line, r, ctx, mode, activeToken);
+      const mode: Mode = lineModes[i] ?? 'text';
+      const tokens = tokenizeLine(line, r, ctx, mode, activeToken, lineResults, i === caretLine);
       // Each line wrapped in its own block element so layoutGutters can read
       // per-line rendered heights (handles wrap accurately because the overlay
       // shares width/font/wrap rules with the editor).
@@ -43,7 +44,7 @@ export function highlightNote(text: string, lineResults: LineResult[], mode: Mod
     .join('');
 }
 
-function tokenizeLine(line: string, r: LineResult | undefined, ctx: HighlightContext, mode: Mode, activeToken?: ActiveToken | null): string {
+function tokenizeLine(line: string, r: LineResult | undefined, ctx: HighlightContext, mode: Mode, activeToken: ActiveToken | null | undefined, lineResults: LineResult[], isCaretLine: boolean): string {
   if (line.length === 0) return '';
 
   // `/no_dec_limit` / `/clear` directive line — render as a single styled
@@ -67,14 +68,45 @@ function tokenizeLine(line: string, r: LineResult | undefined, ctx: HighlightCon
   const bMatch = /^(\s*)([-*])(\s+)(.*)$/.exec(line);
   if (bMatch) {
     const [, lead, mark, gap, rest] = bMatch;
-    const inner = mode === 'math' ? tokenizeMath(rest, r, ctx, activeToken) : highlightInlineMarkdown(escapeHtml(rest));
+    const inner = mode === 'math' ? tokenizeMath(rest, r, ctx, activeToken) : renderTextContent(rest, lineResults, isCaretLine);
     return `${escapeHtml(lead)}<span class="md-bullet">${escapeHtml(mark)}</span>${escapeHtml(gap)}${inner}`;
   }
 
   if (mode === 'text') {
-    return highlightInlineMarkdown(escapeHtml(line));
+    return renderTextContent(line, lineResults, isCaretLine);
   }
   return tokenizeMath(line, r, ctx, activeToken);
+}
+
+// Render a text line's content, replacing inline references — written as
+// ""L<n>"" — with the live result of that math line. On the line the caret is
+// on (or when the target has no value yet) we keep the raw ""L<n>"" so it stays
+// editable; otherwise we show the result, which updates on every render.
+function renderTextContent(raw: string, lineResults: LineResult[], isCaretLine: boolean): string {
+  const refRe = /""[lL](\d+)""/g;
+  let out = '';
+  let last = 0;
+  let m: RegExpExecArray | null;
+  while ((m = refRe.exec(raw)) !== null) {
+    out += highlightInlineMarkdown(escapeHtml(raw.slice(last, m.index)));
+    out += renderRefToken(m[0], parseInt(m[1], 10), lineResults, isCaretLine);
+    last = m.index + m[0].length;
+  }
+  out += highlightInlineMarkdown(escapeHtml(raw.slice(last)));
+  return out;
+}
+
+function renderRefToken(rawToken: string, lineNum: number, lineResults: LineResult[], isCaretLine: boolean): string {
+  const res = lineResults[lineNum - 1];
+  const hasVal = !!res && !res.error && (res.numeric !== undefined || res.stringValue !== undefined);
+  if (isCaretLine || !hasVal) {
+    // Raw ""L#"" — editable when the caret is here, or a visible placeholder
+    // when the referenced line has no value yet.
+    const cls = hasVal ? 'tk-textref-raw' : 'tk-textref-raw tk-textref-unresolved';
+    return `<span class="${cls}">${escapeHtml(rawToken)}</span>`;
+  }
+  const display = res!.display ?? res!.stringValue ?? String(res!.numeric);
+  return `<span class="tk-textref" title="from L${lineNum}">${escapeHtml(display)}</span>`;
 }
 
 // Tokenize a math-bearing line. Recognises numbers, identifiers, operators,

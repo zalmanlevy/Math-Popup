@@ -9,6 +9,7 @@ const overlay = document.getElementById('syntax-overlay') as HTMLPreElement;
 const measure = document.getElementById('measure') as HTMLDivElement;
 const lineGutter = document.getElementById('line-gutter') as HTMLDivElement;
 const resultGutter = document.getElementById('result-gutter') as HTMLDivElement;
+const resultOverlay = document.getElementById('result-overlay') as HTMLDivElement;
 const status = document.getElementById('status-msg') as HTMLSpanElement;
 const closeBtn = document.getElementById('close-window') as HTMLButtonElement;
 const settingsBtn = document.getElementById('open-settings') as HTMLButtonElement;
@@ -41,11 +42,21 @@ let overflowHideTimer: number | null = null;
 // When true, the overflow dropdown is in drag-to-reorder mode (shows all tabs).
 let reorderMode = false;
 let lastResults: LineResult[] = [];
+// Per-line mode for the active page (parallel to editor lines) + the text
+// snapshot it's aligned to. syncLineModes() in render() keeps it in step with
+// every edit, so we don't have to touch each editor.value assignment site.
+let lineModes: Mode[] = [];
+let lineModesText = '';
 let saveTimer: number | null = null;
+// Pending single-click line-ref insert, held briefly so a double-click can
+// pre-empt it (double-click toggles the line's math/text instead).
+let pendingRefClick: { line: number; timer: number } | null = null;
+// The line index whose ref-display was last rendered "raw" (caret on it), so we
+// only re-render on caret moves that actually change it.
+let lastCaretLine = -1;
 let activeToken: ActiveToken | null = null;
 const tabsBtn = document.getElementById('tabs-btn') as HTMLButtonElement;
 const archiveBtn = document.getElementById('archive-btn') as HTMLButtonElement;
-const modeToggleBtn = document.getElementById('mode-toggle-btn') as HTMLButtonElement;
 const tabBar = document.getElementById('tab-bar') as HTMLElement;
 const tabStrip = document.getElementById('tab-strip') as HTMLElement;
 const tabAddBtn = document.getElementById('tab-add-btn') as HTMLButtonElement;
@@ -68,7 +79,7 @@ async function init() {
   activePageId = settings.activePageId || '';
   if (pages.length === 0) {
     const id = Date.now().toString();
-    pages.push({ id, title: 'Page 1', content: settings.noteContent ?? '', mode: settings.mode ?? 'math' });
+    pages.push({ id, title: 'Page 1', content: settings.noteContent ?? '', mode: 'text', lineModes: ['text'] });
     activePageId = id;
   }
   const activePage = pages.find(p => p.id === activePageId) || pages[0];
@@ -77,13 +88,15 @@ async function init() {
   editor.value = activePage.content;
   previousText = editor.value;
   applyTheme(settings.theme);
-  applyMode(activePage.mode);
+  loadPageModes(activePage);
   applyAlwaysOnTop(settings.alwaysOnTop);
   applyZoom(settings.zoom ?? 1, { silent: true });
   bindEvents();
   // Re-render syntax overlay if the system theme flips while the app is open.
   window.mathPopup.onThemeChanged(() => render());
   updatePageIndicator();
+  // Restore the tab bar's expanded/collapsed state from last session.
+  if (settings.tabBarOpen) showTabBar();
   render();
   editor.focus();
 }
@@ -169,6 +182,13 @@ function bindEvents() {
     hideSignatureTooltip();
   });
   editor.addEventListener('click', () => { updateMenuFromCaret(true); updateActiveToken(); });
+  // Re-render when the caret moves to a different line, so the per-line ref
+  // display (raw "" L# "" vs the live result), the active-answer highlight, and
+  // the current-line number highlight all stay correct.
+  document.addEventListener('selectionchange', () => {
+    if (document.activeElement !== editor) return;
+    if (caretLineIndex() !== lastCaretLine) render();
+  });
   // Line-number gutter: click a number to drop its L-ref at the caret. Using
   // mousedown + preventDefault keeps the textarea focused and its caret intact
   // (the standard "toolbar button inserts into a focused field" trick), so the
@@ -178,7 +198,25 @@ function bindEvents() {
     if (!row) return;
     e.preventDefault();
     const n = parseInt(row.dataset.line || '', 10);
-    if (Number.isFinite(n)) insertLineRefAtCaret(n);
+    if (!Number.isFinite(n)) return;
+    // Double-click a number → toggle that line between math and text. Single
+    // click → insert its L-ref at the caret (delayed a moment so a double-click
+    // can pre-empt the insert).
+    if (pendingRefClick && pendingRefClick.line === n) {
+      window.clearTimeout(pendingRefClick.timer);
+      pendingRefClick = null;
+      toggleLineMode(n - 1);
+      return;
+    }
+    if (pendingRefClick) {            // a click on a different line commits the previous one first
+      window.clearTimeout(pendingRefClick.timer);
+      const prev = pendingRefClick.line;
+      pendingRefClick = null;
+      insertLineRefAtCaret(prev);
+    }
+    const line = n;
+    const timer = window.setTimeout(() => { pendingRefClick = null; insertLineRefAtCaret(line); }, 250);
+    pendingRefClick = { line, timer };
   });
 
   // Find (Ctrl/Cmd+F). Window-level so it opens whatever currently has focus;
@@ -291,11 +329,6 @@ function bindEvents() {
   varsPopup.addEventListener('mouseenter', cancelHideVarsPopup);
   varsPopup.addEventListener('mouseleave', scheduleHideVarsPopup);
 
-  modeToggleBtn.addEventListener('click', () => {
-    const activePage = pages.find(p => p.id === activePageId);
-    if (activePage) setMode(activePage.mode === 'math' ? 'text' : 'math');
-  });
-
   // Update indicator: dot on the settings (⚙) button while there's a pending
   // update. Pull the current phase on load, then react to live changes.
   window.mathPopup.getUpdateState().then(applyUpdateIndicator);
@@ -310,7 +343,7 @@ function bindEvents() {
       const activePage = pages.find(p => p.id === activePageId) || pages[0];
       editor.value = activePage.content;
       previousText = editor.value;
-      applyMode(activePage.mode);
+      loadPageModes(activePage);
     }
     applyTheme(settings.theme);
     applyAlwaysOnTop(settings.alwaysOnTop);
@@ -324,20 +357,103 @@ function bindEvents() {
   });
 }
 
-function setMode(mode: Mode) {
+function lineModeAt(i: number): Mode {
+  return lineModes[i] ?? 'text';
+}
+// The 0-based index of the line the caret is on.
+function caretLineIndex(): number {
+  const upto = editor.value.slice(0, editor.selectionStart);
+  let n = 0;
+  for (let i = 0; i < upto.length; i++) if (upto[i] === '\n') n++;
+  return n;
+}
+function countLines(t: string): number {
+  let n = 1;
+  for (let i = 0; i < t.length; i++) if (t[i] === '\n') n++;
+  return n;
+}
+function padLineModes(t: string) {
+  const n = countLines(t);
+  const fixed: Mode[] = [];
+  for (let i = 0; i < n; i++) fixed[i] = lineModes[i] ?? 'text';
+  lineModes = fixed;
+}
+// Load the active page's per-line modes (deriving from the legacy per-page mode
+// for notes saved before per-line modes existed) and re-anchor the sync.
+function loadPageModes(page: Page) {
+  const n = countLines(editor.value);
+  if (Array.isArray(page.lineModes) && page.lineModes.length) {
+    lineModes = Array.from({ length: n }, (_, i) => page.lineModes![i] ?? 'text');
+  } else {
+    const seed: Mode = page.mode === 'math' ? 'math' : 'text';
+    lineModes = Array.from({ length: n }, () => seed);
+  }
+  lineModesText = editor.value;
+}
+// Keep lineModes aligned to the current text. Called at the top of render() —
+// the single choke point all edits pass through. Newly inserted lines inherit
+// the mode of the line above the insertion (so Enter carries math/text forward).
+function syncLineModes() {
+  const newText = editor.value;
+  if (newText === lineModesText) {
+    if (lineModes.length !== countLines(newText)) padLineModes(newText);
+    return;
+  }
+  const oldLines = lineModesText.split('\n');
+  const newLines = newText.split('\n');
+  const oldLen = oldLines.length;
+  const newLen = newLines.length;
+
+  if (newLen === oldLen + 1) {
+    // Exactly one line inserted (typically pressing Enter): the caret sits on
+    // the new line, so place it there and inherit the line just above it. This
+    // is caret-based, so it stays correct even amid blank lines — which a
+    // content diff can't tell apart.
+    const k = Math.min(caretLineIndex(), newLen - 1);
+    const next: Mode[] = new Array(newLen);
+    for (let i = 0; i < k; i++) next[i] = lineModes[i] ?? 'text';
+    next[k] = lineModes[Math.max(0, k - 1)] ?? 'text';
+    for (let i = k + 1; i < newLen; i++) next[i] = lineModes[i - 1] ?? 'text';
+    lineModes = next;
+    lineModesText = newText;
+    return;
+  }
+
+  if (oldLen !== newLen) {
+    // Line-based diff: the common leading and trailing lines keep their mode;
+    // the changed middle is new and inherits the mode of the line just above it
+    // (so pressing Enter on a math line keeps the new line math, and merging a
+    // line into a math line above doesn't flip that line to text).
+    let lead = 0;
+    while (lead < oldLen && lead < newLen && oldLines[lead] === newLines[lead]) lead++;
+    let trail = 0;
+    while (trail < oldLen - lead && trail < newLen - lead &&
+           oldLines[oldLen - 1 - trail] === newLines[newLen - 1 - trail]) trail++;
+    const next: Mode[] = new Array(newLen);
+    for (let i = 0; i < lead; i++) next[i] = lineModes[i] ?? 'text';
+    for (let j = 0; j < trail; j++) next[newLen - 1 - j] = lineModes[oldLen - 1 - j] ?? 'text';
+    // New middle lines inherit the mode they continue from: a pure insertion
+    // takes the line above (lead-1); a merge/replace takes the first changed
+    // line (lead), so backspacing a math line into a math line above stays math.
+    const oldChanged = (oldLen - trail) > lead;
+    const inherit: Mode = oldChanged
+      ? (lineModes[lead] ?? 'text')
+      : (lineModes[Math.max(0, lead - 1)] ?? 'text');
+    for (let i = lead; i < newLen - trail; i++) next[i] = inherit;
+    lineModes = next;
+  }
+  lineModesText = newText;
+}
+// Flip one line between math and text (the gutter-number click), persist, rerender.
+function toggleLineMode(i: number) {
+  if (i < 0) return;
+  padLineModes(editor.value);
+  lineModes[i] = lineModeAt(i) === 'math' ? 'text' : 'math';
   const activePage = pages.find(p => p.id === activePageId);
-  if (!activePage || activePage.mode === mode) return;
-  activePage.mode = mode;
-  applyMode(mode);
+  if (activePage) activePage.lineModes = [...lineModes];
   window.mathPopup.setSettings({ pages, activePageId, closedPages });
   render();
   editor.focus();
-}
-
-function applyMode(mode: Mode) {
-  document.body.classList.toggle('text-mode', mode === 'text');
-  modeToggleBtn.title = mode === 'math' ? 'Mode: Math' : 'Mode: Text';
-  modeToggleBtn.innerHTML = mode === 'math' ? '∑' : 'Aa';
 }
 
 function applyUpdateIndicator(state: { phase: string }) {
@@ -349,11 +465,11 @@ function applyUpdateIndicator(state: { phase: string }) {
   settingsBtn.title = showDot ? 'Settings — update available' : 'Settings';
 }
 
-// Per-tab mode lives on activePage.mode. settings.mode is a legacy/global
-// fallback that's no longer reliable (the focus handler reloads it from disk
-// and we never persist it on toggle), so always read the active page.
+// "Current mode" = the mode of the line the caret is on. The caret-relative
+// behaviours (auto-format, smart-tab, list continuation, menus, status bar) all
+// read this, so each just works per line.
 function currentMode(): Mode {
-  return pages.find(p => p.id === activePageId)?.mode ?? settings?.mode ?? 'math';
+  return lineModeAt(caretLineIndex());
 }
 
 function applyAlwaysOnTop(on: boolean) {
@@ -373,10 +489,10 @@ function onInput() {
   justClosedTab = false;
   const previousToken = activeToken;
   activeToken = null;
-  if (currentMode() === 'math') {
-    maybeSyncRename(previousToken);
-    maybeShiftLineRefs();
-  }
+  // Refs / variable renames can live on any math line regardless of where the
+  // caret is, so keep them in sync on every edit.
+  maybeSyncRename(previousToken);
+  maybeShiftLineRefs();
   noteTypingForUndo();
   previousText = editor.value;
   scheduleSave();
@@ -678,7 +794,7 @@ function scheduleSave() {
   if (saveTimer) window.clearTimeout(saveTimer);
   saveTimer = window.setTimeout(() => {
     const activePage = pages.find(p => p.id === activePageId);
-    if (activePage) activePage.content = editor.value;
+    if (activePage) { activePage.content = editor.value; activePage.lineModes = [...lineModes]; }
     window.mathPopup.setSettings({ pages, activePageId });
   }, 250);
 }
@@ -700,11 +816,19 @@ function showTabBar() {
   tabBar.classList.add('open');
   tabsBtn.classList.add('active');
   renderTabBar();
+  persistTabBarState(true);
 }
 function hideTabBar() {
   tabBar.classList.remove('open');
   tabsBtn.classList.remove('active');
   hideOverflowPopup();
+  persistTabBarState(false);
+}
+// Remember whether the tab bar is expanded so it can be restored next launch.
+function persistTabBarState(open: boolean) {
+  if (!settings || settings.tabBarOpen === open) return;
+  settings.tabBarOpen = open;
+  window.mathPopup.setSettings({ tabBarOpen: open });
 }
 // Re-render the chips (e.g. after a switch/add/close) only while the bar is open.
 function refreshTabBar() {
@@ -1149,10 +1273,10 @@ function switchTab(id: string) {
   const next = pages.find(p => p.id === activePageId)!;
   editor.value = next.content;
   previousText = editor.value;
-  
-  applyMode(next.mode);
+
+  loadPageModes(next);
   window.mathPopup.setSettings({ pages, activePageId, closedPages });
-  
+
   updatePageIndicator();
   render();
   editor.focus();
@@ -1162,16 +1286,17 @@ function addTab() {
   if (pages.length >= 99) return;
   justClosedTab = false;
   const current = pages.find(p => p.id === activePageId);
-  if (current) current.content = editor.value;
-  
+  if (current) { current.content = editor.value; current.lineModes = [...lineModes]; }
+
   const id = Date.now().toString();
   const title = `Page ${pages.length + 1}`;
-  pages.push({ id, title, content: '', mode: 'math' });
+  const page: Page = { id, title, content: '', mode: 'text', lineModes: ['text'] };
+  pages.push(page);
   activePageId = id;
-  
+
   editor.value = '';
   previousText = '';
-  applyMode('math');
+  loadPageModes(page);
   window.mathPopup.setSettings({ pages, activePageId, closedPages });
   
   updatePageIndicator();
@@ -1184,25 +1309,25 @@ function closeTab(id: string) {
   if (index === -1) return;
   
   const current = pages[index];
-  if (id === activePageId) current.content = editor.value;
+  if (id === activePageId) { current.content = editor.value; current.lineModes = [...lineModes]; }
   closedPages.unshift(current);
   if (closedPages.length > 10) closedPages.pop();
-  
+
   pages.splice(index, 1);
   if (pages.length === 0) {
     const newId = Date.now().toString();
-    pages.push({ id: newId, title: 'Page 1', content: '', mode: 'math' });
+    pages.push({ id: newId, title: 'Page 1', content: '', mode: 'text', lineModes: ['text'] });
     activePageId = newId;
   } else if (id === activePageId) {
     const nextIndex = Math.min(index, pages.length - 1);
     activePageId = pages[nextIndex].id;
   }
-  
+
   const next = pages.find(p => p.id === activePageId)!;
   editor.value = next.content;
   previousText = editor.value;
-  
-  applyMode(next.mode);
+
+  loadPageModes(next);
   window.mathPopup.setSettings({ pages, activePageId, closedPages });
 
   updatePageIndicator();
@@ -1216,15 +1341,15 @@ function restoreTab(closedIndex: number) {
   justClosedTab = false;
   const page = closedPages.splice(closedIndex, 1)[0];
   const current = pages.find(p => p.id === activePageId);
-  if (current) current.content = editor.value;
-  
+  if (current) { current.content = editor.value; current.lineModes = [...lineModes]; }
+
   pages.push(page);
   activePageId = page.id;
-  
+
   editor.value = page.content;
   previousText = editor.value;
-  
-  applyMode(page.mode);
+
+  loadPageModes(page);
   window.mathPopup.setSettings({ pages, activePageId, closedPages });
   
   updatePageIndicator();
@@ -1285,6 +1410,14 @@ function onKeyDown(e: KeyboardEvent) {
   if ((e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey && (e.key === 'y' || e.key === 'Y')) {
     e.preventDefault();
     doRedo();
+    return;
+  }
+
+  // "/math" or "/text" alone on a line → convert it (the word is stripped) when
+  // the user presses Space or Enter.
+  if ((e.key === ' ' || e.key === 'Enter') && !e.ctrlKey && !e.altKey && !e.metaKey && !e.shiftKey &&
+      handleModeCommand()) {
+    e.preventDefault();
     return;
   }
 
@@ -1453,6 +1586,34 @@ function parseListLine(line: string): ListMarker | null {
   if (spaceAfter.length === 0 && !(num && !hasContent)) return null;
   const markerLen = indent.length + (bullet ? bullet.length : num!.length + delim!.length) + spaceAfter.length;
   return { indent, bullet, num, delim, spaceAfter, content, markerLen };
+}
+
+// "/math" or "/text" alone on a line: convert that line's mode and strip the
+// command word. Triggered by Space/Enter typed right after the word.
+function handleModeCommand(): boolean {
+  if (editor.selectionStart !== editor.selectionEnd) return false;
+  const text = editor.value;
+  const caret = editor.selectionStart;
+  const lineStart = text.lastIndexOf('\n', caret - 1) + 1;
+  // Match a "/math" or "/text" token ending at the caret — at the line start or
+  // after whitespace — so it works mid-line too.
+  const m = /(^|\s)\/(math|text)$/i.exec(text.slice(lineStart, caret));
+  if (!m) return false;
+  const idx = caretLineIndex();
+  const tokenStart = lineStart + m.index + m[1].length;   // position of the "/"
+  captureForUndo();
+  // Strip the command word, keeping everything before it.
+  editor.value = text.slice(0, tokenStart) + text.slice(caret);
+  editor.selectionStart = editor.selectionEnd = tokenStart;
+  previousText = editor.value;
+  padLineModes(editor.value);
+  lineModes[idx] = m[2].toLowerCase() === 'math' ? 'math' : 'text';
+  const activePage = pages.find(p => p.id === activePageId);
+  if (activePage) activePage.lineModes = [...lineModes];
+  if (menuState.open) hideMenu();
+  scheduleSave();
+  render();
+  return true;
 }
 
 // Enter on a list item continues the list (numbers auto-increment, indentation
@@ -1657,21 +1818,14 @@ function formatNumberForEditor(n: number, useCommas: boolean): string {
 
 // ---- render pipeline ----
 function render() {
-  const mode = currentMode();
-  if (mode === 'math') {
-    // Pass the previous render's results so the evaluator can carry over
-    // last-good values for lines that are temporarily mid-edit.
-    lastResults = evaluateNote(editor.value, settings.suffixes, lastResults, settings.decimals);
-  } else {
-    // Text mode: no evaluation, no results.
-    lastResults = editor.value.split('\n').map((raw, i) => ({
-      index: i,
-      kind: 'text' as const,
-      raw,
-      display: ''
-    }));
-  }
-  overlay.innerHTML = highlightNote(editor.value, lastResults, mode, activeToken);
+  // Keep per-line modes aligned to the current text (single choke point).
+  syncLineModes();
+  // Evaluate only the math lines; text lines stay inert (no result) but are
+  // still classified so the highlighter can style their markdown. Passing the
+  // previous results lets the evaluator carry over last-good values mid-edit.
+  lastResults = evaluateNote(editor.value, settings.suffixes, lastResults, settings.decimals, lineModes);
+  lastCaretLine = document.activeElement === editor ? caretLineIndex() : -1;
+  overlay.innerHTML = highlightNote(editor.value, lastResults, lineModes, activeToken, lastCaretLine);
   syncScroll();
   layoutGutters();
   updateStatus();
@@ -1684,6 +1838,7 @@ function syncScroll() {
   // Keep gutters in vertical sync with the editor's scroll.
   lineGutter.scrollTop = editor.scrollTop;
   resultGutter.scrollTop = editor.scrollTop;
+  resultOverlay.scrollTop = editor.scrollTop;
   if (findActive) {
     findLayer.scrollTop = editor.scrollTop;
     findLayer.scrollLeft = editor.scrollLeft;
@@ -1692,6 +1847,7 @@ function syncScroll() {
 
 function layoutGutters() {
   const lines = editor.value.split('\n');
+  const caretLine = document.activeElement === editor ? caretLineIndex() : -1;
   // (heights are read from the overlay's rendered children below)
   const editorStyle = getComputedStyle(editor);
 
@@ -1742,54 +1898,52 @@ function layoutGutters() {
   lineGutter.innerHTML = heights
     .map((h, i) => {
       const isHl = activeToken?.type === 'lref' && activeToken.line === i + 1;
-      const cls = isHl ? ' hl-lref' : '';
-      return `<div class="row${cls}" style="height:${h}px" data-line="${i + 1}" title="Click to insert L${i + 1}">L${i + 1}</div>`;
+      const isMath = lineModeAt(i) === 'math';
+      const cls = (isHl ? ' hl-lref' : '') + (isMath ? ' math-line' : '') + (i === caretLine ? ' current' : '');
+      return `<div class="row${cls}" style="height:${h}px" data-line="${i + 1}"><span class="lnum">L${i + 1}</span></div>`;
     })
     .join('');
+  bindLineGutterTooltips();
 
-  // Build result column
-  resultGutter.innerHTML = heights
+  // Build the inline result overlay: a green "= answer" pinned to the right edge
+  // of each math line (errors render after the "="). Rows are transparent and
+  // click-through; only the chip itself is interactive (hover to copy).
+  resultOverlay.innerHTML = heights
     .map((h, i) => {
       const r = lastResults[i];
-      if (!r) return `<div class="row empty" style="height:${h}px"></div>`;
+      const blank = `<div class="row" style="height:${h}px"></div>`;
+      if (!r || lineModeAt(i) !== 'math') return blank;
+      const activeCls = i === caretLine ? ' active' : '';   // caret on this math line → highlight its answer
       if (r.error) {
-        // Mid-typing / incomplete expression → soft grey "N/A". Everything else
-        // is a genuine error → a muted (calm) error color, all consistent.
-        if (r.errorKind === 'incomplete') {
-          const tip = escapeAttr(r.errorTooltip ?? 'Incomplete expression — keep typing.');
-          return `<div class="row err-faint" style="height:${h}px" data-tooltip="${tip}">N/A</div>`;
-        }
-        // Friendly labels keep their wording; real mistakes just say "error".
-        // Custom hover tooltip only (no `title`) so it doesn't stack with the OS one.
-        if (r.errorKind === 'reserved-excel') {
-          const tip = escapeAttr(r.errorTooltip ?? EXCEL_FORMULA_TOOLTIP);
-          return `<div class="row err-calm" style="height:${h}px" data-tooltip="${tip}">Excel Formula</div>`;
-        }
-        if (r.errorKind === 'duplicate-var') {
-          const tip = escapeAttr(r.errorTooltip ?? DUPLICATE_VAR_TOOLTIP);
-          return `<div class="row err-calm" style="height:${h}px" data-tooltip="${tip}">Duplicate</div>`;
-        }
-        if (r.errorKind === 'reserved-name') {
-          const tip = escapeAttr(r.errorTooltip ?? RESERVED_NAME_TOOLTIP);
-          return `<div class="row err-calm" style="height:${h}px" data-tooltip="${tip}">Reserved</div>`;
-        }
-        // reserved-x, unquoted-string (undefined name), and any general error
-        // all read as "error". unquoted-string keeps its explanatory tooltip.
+        let label = 'error';
+        let errCls = 'err-calm';
         let tip = r.errorTooltip ?? r.error ?? 'Error';
-        if (r.errorKind === 'reserved-x') tip = r.errorTooltip ?? X_RESERVED_TOOLTIP;
-        else if (r.errorKind === 'unquoted-string') tip = r.errorTooltip ?? UNQUOTED_STRING_TOOLTIP;
-        return `<div class="row err-calm" style="height:${h}px" data-tooltip="${escapeAttr(tip)}">error</div>`;
+        if (r.errorKind === 'incomplete') { label = 'N/A'; errCls = 'err-faint'; tip = r.errorTooltip ?? 'Incomplete expression — keep typing.'; }
+        else if (r.errorKind === 'reserved-excel') { label = 'Excel Formula'; tip = r.errorTooltip ?? EXCEL_FORMULA_TOOLTIP; }
+        else if (r.errorKind === 'duplicate-var') { label = 'Duplicate'; tip = r.errorTooltip ?? DUPLICATE_VAR_TOOLTIP; }
+        else if (r.errorKind === 'reserved-name') { label = 'Reserved'; tip = r.errorTooltip ?? RESERVED_NAME_TOOLTIP; }
+        else if (r.errorKind === 'reserved-x') { tip = r.errorTooltip ?? X_RESERVED_TOOLTIP; }
+        else if (r.errorKind === 'unquoted-string') { tip = r.errorTooltip ?? UNQUOTED_STRING_TOOLTIP; }
+        return `<div class="row" style="height:${h}px"><span class="res ${errCls}${activeCls}" data-tooltip="${escapeAttr(tip)}"><span class="eq">=</span> ${escapeHtml(label)}</span></div>`;
       }
       const txt = r.display ?? '';
-      let cls = 'row';
-      if (txt === '') cls = 'row empty';
-      else if (r.stale) cls = 'row stale';
-      const copyable = txt !== '' && (r.numeric !== undefined || r.stringValue !== undefined);
+      if (txt === '') return blank;
+      const copyable = r.numeric !== undefined || r.stringValue !== undefined;
       const iconHtml = copyable ? COPY_ICON_HTML : '';
-      return `<div class="${cls}" style="height:${h}px">${escapeHtml(txt)}${iconHtml}</div>`;
+      const staleCls = r.stale ? ' stale' : '';
+      return `<div class="row" style="height:${h}px"><span class="res${staleCls}${activeCls}"><span class="eq">=</span> ${escapeHtml(txt)}${iconHtml}</span></div>`;
     })
     .join('');
-  // Re-bind tooltip and click handlers (the rows just got recreated).
+  resultGutter.innerHTML = '';   // results live inline now; the column stays hidden
+  // Align all "=" vertically: make every chip as wide as the widest one. Chips
+  // right-align with left-aligned content, so the "=" signs line up in a column
+  // that shifts left together as the longest result grows.
+  const chips = resultOverlay.querySelectorAll<HTMLElement>('.res');
+  chips.forEach(c => { c.style.minWidth = ''; });
+  let maxChipW = 0;
+  chips.forEach(c => { if (c.offsetWidth > maxChipW) maxChipW = c.offsetWidth; });
+  if (maxChipW > 0) chips.forEach(c => { c.style.minWidth = `${maxChipW}px`; });
+  // Re-bind tooltip and click handlers (the chips just got recreated).
   bindResultTooltips();
   bindResultClicks();
 }
@@ -1954,6 +2108,18 @@ const menuState: MenuState = {
 function buildSlashCommands(): SlashCmd[] {
   return [
     {
+      insert: '',
+      label: '/math',
+      hint: 'Make this line math',
+      action: () => setCaretLineMode('math')
+    },
+    {
+      insert: '',
+      label: '/text',
+      hint: 'Make this line text',
+      action: () => setCaretLineMode('text')
+    },
+    {
       insert: '/no_dec_limit',
       label: '/no_dec_limit',
       hint: 'Up to 6 decimals'
@@ -1965,6 +2131,18 @@ function buildSlashCommands(): SlashCmd[] {
       action: clearNote
     }
   ];
+}
+
+// Set the caret line's mode — backing the /math and /text slash commands.
+function setCaretLineMode(mode: Mode) {
+  const idx = caretLineIndex();
+  padLineModes(editor.value);
+  lineModes[idx] = mode;
+  const activePage = pages.find(p => p.id === activePageId);
+  if (activePage) activePage.lineModes = [...lineModes];
+  scheduleSave();
+  render();
+  editor.focus();
 }
 
 function buildVarCompCommands(): SlashCmd[] {
@@ -2016,10 +2194,6 @@ function clearNote() {
 // fromClick = true suppresses the varcomp trigger (clicking into the middle of a
 // word should highlight it, not open an autocomplete that would duplicate text).
 function updateMenuFromCaret(fromClick = false) {
-  if (currentMode() !== 'math') {
-    if (menuState.open) hideMenu();
-    return;
-  }
   const caret = editor.selectionStart;
   const text = editor.value;
 
@@ -2053,14 +2227,15 @@ function updateMenuFromCaret(fromClick = false) {
   // Not open: detect a fresh trigger.
   const ch = text[caret - 1];
   if (ch === '/') {
-    // Only when the slash is the first non-whitespace on its line.
-    const lineStart = text.lastIndexOf('\n', caret - 2) + 1;
-    const before = text.slice(lineStart, caret - 1);
-    if (!/^\s*$/.test(before)) return;
+    // Trigger wherever "/" starts a word — line start or right after whitespace
+    // — so commands work mid-line too. A "/" following a digit/letter (e.g. the
+    // division "5/2") is left alone.
+    const before = text[caret - 2];
+    if (before !== undefined && !/\s/.test(before)) return;
     openMenu('slash', caret - 1);
     return;
   }
-  if (ch === 'L' || ch === 'l') {
+  if ((ch === 'L' || ch === 'l') && currentMode() === 'math') {
     // Only when not part of an existing identifier.
     const prev = text[caret - 2];
     if (prev !== undefined && /[A-Za-z0-9_]/.test(prev)) return;
@@ -2074,8 +2249,8 @@ function updateMenuFromCaret(fromClick = false) {
     return;
   }
 
-  // Variable completion: only when actively typing (not on click).
-  if (!fromClick) {
+  // Variable completion: only when actively typing in a math line.
+  if (!fromClick && currentMode() === 'math') {
     let identStart = caret;
     while (identStart > 0 && /[A-Za-z0-9_]/.test(text[identStart - 1])) identStart--;
     // Must start with a letter/underscore (not a digit mid-number).
@@ -2144,6 +2319,9 @@ function filterAndRender(fragment: string) {
     menuState.filtered = menuState.items.filter(it => it.insert.startsWith(q));
   }
   if (menuState.filtered.length === 0) {
+    // A non-matching slash fragment (e.g. "/2" while typing division) just
+    // closes the menu instead of lingering on "No matches".
+    if (menuState.kind === 'slash') { hideMenu(); return; }
     cmdMenu.innerHTML = `<div class="cmd-empty">No matches</div>`;
     return;
   }
@@ -2669,26 +2847,51 @@ function doRedo() {
 // ============================================================
 
 function bindResultTooltips() {
-  const rows = resultGutter.querySelectorAll<HTMLDivElement>('.row[data-tooltip]');
-  rows.forEach(row => {
-    row.addEventListener('mouseenter', () => showTooltipFor(row));
+  const chips = resultOverlay.querySelectorAll<HTMLElement>('.res[data-tooltip]');
+  chips.forEach(chip => {
+    chip.addEventListener('mouseenter', () => showTooltipFor(chip));
+    chip.addEventListener('mouseleave', hideTooltip);
+  });
+}
+
+// Line-number gutter rows use the same custom hover tooltip as result errors
+// (instead of the native title attribute).
+function bindLineGutterTooltips() {
+  lineGutter.querySelectorAll<HTMLElement>('.row[data-line]').forEach(row => {
+    row.addEventListener('mouseenter', () => showLineGutterTooltip(row));
     row.addEventListener('mouseleave', hideTooltip);
   });
 }
 
+function showLineGutterTooltip(row: HTMLElement) {
+  const n = row.dataset.line;
+  if (!n) return;
+  const isMath = row.classList.contains('math-line');
+  const cur = isMath ? 'math' : 'text';
+  const other = isMath ? 'text' : 'math';
+  const typeSpan = (t: string) => `<span class="tip-type-${t}">${t}</span>`;
+  showTooltipHTML(row,
+    `<div class="tip-title">L${n} — ${typeSpan(cur)} line</div>` +
+    `<div>Single-click: insert this reference</div>` +
+    `<div>Double-click: make this ${typeSpan(other)}</div>`,
+    650);   // longer hover-intent delay so it doesn't pop up the instant you pass over a number
+}
+
 function bindResultClicks() {
-  // Select ALL rows (including empty) so index i aligns with lastResults[i].
-  resultGutter.querySelectorAll<HTMLDivElement>('.row').forEach((row, i) => {
-    if (row.classList.contains('empty')) return;
+  // One row per line (index i aligns with lastResults[i]); only math rows with a
+  // value carry a `.res` chip.
+  resultOverlay.querySelectorAll<HTMLDivElement>('.row').forEach((row, i) => {
+    const chip = row.querySelector<HTMLSpanElement>('.res');
+    if (!chip) return;
     const r = lastResults[i];
     if (!r || (r.numeric === undefined && r.stringValue === undefined)) return;
     const val = r.stringValue ?? String(r.numeric);
     const display = r.display ?? val;
-    row.style.cursor = 'pointer';
-    row.addEventListener('click', () => {
+    chip.style.cursor = 'pointer';
+    chip.addEventListener('click', () => {
       window.mathPopup.copyText(val);
       flashStatus(`Copied ${display}`);
-      const iconEl = row.querySelector<HTMLSpanElement>('.copy-icon');
+      const iconEl = chip.querySelector<HTMLSpanElement>('.copy-icon');
       if (iconEl) {
         iconEl.innerHTML = COPIED_ICON_HTML;
         iconEl.classList.add('copied');
@@ -2703,31 +2906,42 @@ function bindResultClicks() {
 
 let tooltipShowTimer: number | null = null;
 
-function showTooltipFor(row: HTMLDivElement) {
+function showTooltipFor(row: HTMLElement) {
   const text = row.dataset.tooltip;
   if (!text) return;
   if (tooltipShowTimer) window.clearTimeout(tooltipShowTimer);
   tooltipShowTimer = window.setTimeout(() => {
     hoverTooltip.textContent = text;
     hoverTooltip.hidden = false;
-    // Position above the row, horizontally aligned with its left edge but
-    // clamped to the window.
-    const rect = row.getBoundingClientRect();
-    // Show first to measure
-    hoverTooltip.style.left = '-9999px';
-    hoverTooltip.style.top = '0px';
-    const tipRect = hoverTooltip.getBoundingClientRect();
-    const padding = 6;
-    let top = rect.top - tipRect.height - padding;
-    if (top < 4) top = rect.bottom + padding; // flip below if no room above
-    let left = rect.left;
-    if (left + tipRect.width + 4 > window.innerWidth) {
-      left = window.innerWidth - tipRect.width - 4;
-    }
-    if (left < 4) left = 4;
-    hoverTooltip.style.left = left + 'px';
-    hoverTooltip.style.top = top + 'px';
+    positionTooltipAt(row);
   }, 250);
+}
+
+// Like showTooltipFor, but renders rich HTML (used by the line-number tooltip).
+function showTooltipHTML(anchor: HTMLElement, html: string, delay = 250) {
+  if (tooltipShowTimer) window.clearTimeout(tooltipShowTimer);
+  tooltipShowTimer = window.setTimeout(() => {
+    hoverTooltip.innerHTML = html;
+    hoverTooltip.hidden = false;
+    positionTooltipAt(anchor);
+  }, delay);
+}
+
+// Place the hover tooltip above the anchor (flipping below if there's no room),
+// left-aligned with it and clamped to the window.
+function positionTooltipAt(anchor: HTMLElement) {
+  const rect = anchor.getBoundingClientRect();
+  hoverTooltip.style.left = '-9999px';
+  hoverTooltip.style.top = '0px';
+  const tipRect = hoverTooltip.getBoundingClientRect();
+  const padding = 6;
+  let top = rect.top - tipRect.height - padding;
+  if (top < 4) top = rect.bottom + padding;
+  let left = rect.left;
+  if (left + tipRect.width + 4 > window.innerWidth) left = window.innerWidth - tipRect.width - 4;
+  if (left < 4) left = 4;
+  hoverTooltip.style.left = left + 'px';
+  hoverTooltip.style.top = top + 'px';
 }
 
 function hideTooltip() {
@@ -3004,7 +3218,7 @@ function updateActiveToken() {
   if (tokenEquals(newToken, activeToken)) return;
   activeToken = newToken;
   // Lightweight re-render: just overlay + gutters, no re-evaluation needed.
-  overlay.innerHTML = highlightNote(editor.value, lastResults, currentMode(), activeToken);
+  overlay.innerHTML = highlightNote(editor.value, lastResults, lineModes, activeToken, document.activeElement === editor ? caretLineIndex() : -1);
   layoutGutters();
 }
 

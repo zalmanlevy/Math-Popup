@@ -27,6 +27,7 @@
   --font-ui: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
   --line-height: 22px;
   --editor-padding: 10px;
+  --result-reserve: 96px;   /* right-edge space reserved for inline results, so long math lines wrap before them */
   --editor-font-size: 14px;
 }
 
@@ -550,10 +551,10 @@ body {
   position: relative;
 }
 
-/* In text-mode: hide the result column entirely. Line numbers stay (useful
-   even for a regular notepad) and the math syntax highlighting is suppressed
-   in highlighter.ts. */
-body.text-mode .result-gutter { display: none; }
+/* The old right-hand result column is retired — results now render inline at the
+   right edge of each math line (see .result-overlay). Keep the element in the
+   DOM but hidden so layout reclaims its width for the editor. */
+.result-gutter { display: none; }
 
 .line-gutter, .result-gutter {
   flex: 0 0 auto;
@@ -587,34 +588,22 @@ body.text-mode .result-gutter { display: none; }
   justify-content: flex-end;
   white-space: nowrap;
 }
+/* The number sits in an inline pill so hover/active/ref highlights hug it
+   instead of filling (and clipping at) the full gutter width. */
+.line-gutter .lnum {
+  display: inline-block;
+  padding: 0 5px;
+  border-radius: 5px;
+  transition: background 90ms ease, color 90ms ease;
+}
 
 /* Each line number is a button: click it to insert that line's L-ref at the
    caret. Pointer + a blue pill on hover (and a darker press state) make the
    affordance obvious. */
-.line-gutter .row[data-line] {
-  cursor: pointer;
-  border-radius: 4px;
-  transition: background 90ms ease, color 90ms ease;
-}
-.line-gutter .row[data-line]:hover {
-  color: #0ea5e9;
-  background: rgba(14, 165, 233, 0.16);
-  font-weight: 600;
-}
-.line-gutter .row[data-line]:active {
-  background: rgba(14, 165, 233, 0.30);
-}
-:root[data-theme="dark"] .line-gutter .row[data-line]:hover,
-:root[data-theme="system"] .line-gutter .row[data-line]:hover {
-  color: #38bdf8;
-  background: rgba(56, 189, 248, 0.18);
-}
-@media (prefers-color-scheme: dark) {
-  :root[data-theme="system"] .line-gutter .row[data-line]:hover {
-    color: #38bdf8;
-    background: rgba(56, 189, 248, 0.18);
-  }
-}
+.line-gutter .row[data-line] { cursor: pointer; }
+/* Highlight ONLY the line the caret is on (not on hover). */
+.line-gutter .row.current .lnum { background: rgba(100, 116, 139, 0.22); }
+.line-gutter .row[data-line]:active .lnum { background: rgba(100, 116, 139, 0.34); }
 .result-gutter .row {
   display: flex;
   align-items: flex-end;
@@ -691,6 +680,80 @@ body.text-mode .result-gutter { display: none; }
   }
 }
 
+/* ---------- inline result overlay: the green "= answer" on math lines ---------- */
+.result-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 3;                  /* above the textarea (z2) so chips show + are clickable */
+  pointer-events: none;        /* but let clicks fall through to the textarea... */
+  overflow: hidden;
+  color: var(--result);
+  font-weight: 600;
+  font-family: var(--font-mono);
+  font-size: var(--editor-font-size);
+  line-height: var(--line-height);
+  /* Right padding stays 12px (NOT the reserve) so chips sit at the far right,
+     inside the space the editor reserved — the formula wraps before them. */
+  padding: var(--editor-padding) 12px;
+}
+.result-overlay .row {
+  display: flex;
+  align-items: flex-end;       /* sit at the bottom of a wrapped line, like the old column */
+  justify-content: flex-end;   /* pinned to the right edge */
+}
+.result-overlay .res {
+  pointer-events: auto;        /* ...except the chip itself, which is hoverable/clickable */
+  max-width: calc(var(--result-reserve) - 12px);
+  padding: 0 1px 0 6px;
+  border-radius: 4px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  text-align: left;            /* with the JS-set min-width, lines the "=" up in a column */
+  cursor: pointer;
+}
+.result-overlay .res .eq { color: var(--result); margin-right: 2px; }
+.result-overlay .res:hover,
+.result-overlay .res.active { background: rgba(22, 163, 74, 0.12); }
+:root[data-theme="dark"] .result-overlay .res.active,
+:root[data-theme="system"] .result-overlay .res.active { background: rgba(74, 222, 128, 0.12); }
+.result-overlay .res.stale { color: var(--result-stale); }
+.result-overlay .res.err-faint { color: var(--text-faint); font-weight: 500; }
+.result-overlay .res.err-calm { color: color-mix(in srgb, var(--error) 74%, var(--text-faint)); font-weight: 500; }
+.result-overlay .res.err-faint .eq,
+.result-overlay .res.err-calm .eq { color: var(--result); }   /* keep the "=" green even on errors */
+.result-overlay .res .copy-icon {
+  opacity: 0;
+  margin-left: 5px;
+  color: var(--text-soft);
+  transition: opacity 120ms ease;
+}
+.result-overlay .res:hover .copy-icon { opacity: 0.6; }
+.result-overlay .res .copy-icon.copied { opacity: 1; color: var(--result); }
+:root[data-theme="dark"] .result-overlay .res:hover,
+:root[data-theme="system"] .result-overlay .res:hover { background: rgba(74, 222, 128, 0.12); }
+
+/* Math lines: a green underline marks the number as math when it's NOT the
+   current line; the current math line (caret in it) gets the green highlight
+   fill instead (no underline). */
+.line-gutter .row.math-line .lnum {
+  color: var(--result);
+  font-weight: 600;
+  text-decoration: underline;
+  text-decoration-color: var(--result);
+  text-underline-offset: 2px;
+}
+.line-gutter .row.current.math-line .lnum {
+  background: rgba(22, 163, 74, 0.26);
+  text-decoration: none;
+}
+
+/* inline ""L#"" references shown inside text lines */
+.tk-textref { color: var(--result); font-weight: 600; cursor: pointer; }
+.tk-textref:hover { background: rgba(22, 163, 74, 0.12); border-radius: 3px; }
+.tk-textref-raw { color: var(--result); opacity: 0.8; }
+.tk-textref-unresolved { color: var(--text-faint); opacity: 0.75; }
+
 /* ---------- editor stack: textarea + overlay ---------- */
 .editor-stack {
   flex: 1;
@@ -704,7 +767,9 @@ body.text-mode .result-gutter { display: none; }
   font-family: var(--font-mono);
   font-size: var(--editor-font-size);
   line-height: var(--line-height);
-  padding: var(--editor-padding) 12px;
+  /* Reserve space on the right for the inline results so long math lines wrap
+     before them instead of running underneath. */
+  padding: var(--editor-padding) var(--result-reserve) var(--editor-padding) 12px;
   margin: 0;
   border: 0;
   white-space: pre-wrap;
@@ -906,20 +971,17 @@ body.text-mode .result-gutter { display: none; }
   background: var(--accent-soft);
   border-radius: 3px;
 }
-.line-gutter .row.hl-lref {
+.line-gutter .row.hl-lref .lnum {
   color: #0ea5e9;
   background: rgba(14, 165, 233, 0.12);
-  border-radius: 3px;
-  padding-left: 2px;
-  padding-right: 2px;
 }
-:root[data-theme="dark"] .line-gutter .row.hl-lref,
-:root[data-theme="system"] .line-gutter .row.hl-lref {
+:root[data-theme="dark"] .line-gutter .row.hl-lref .lnum,
+:root[data-theme="system"] .line-gutter .row.hl-lref .lnum {
   color: #38bdf8;
   background: rgba(56, 189, 248, 0.12);
 }
 @media (prefers-color-scheme: dark) {
-  :root[data-theme="system"] .line-gutter .row.hl-lref {
+  :root[data-theme="system"] .line-gutter .row.hl-lref .lnum {
     color: #38bdf8;
     background: rgba(56, 189, 248, 0.12);
   }
@@ -1148,6 +1210,10 @@ body.text-mode .result-gutter { display: none; }
   pointer-events: none;
 }
 .hover-tooltip[hidden] { display: none; }
+/* line-number tooltip: title line + the math/text type words highlighted */
+.hover-tooltip .tip-title { font-weight: 600; margin-bottom: 3px; }
+.hover-tooltip .tip-type-math { color: var(--result); font-weight: 700; }
+.hover-tooltip .tip-type-text { color: var(--accent); font-weight: 700; }
 
 /* markdown */
 .md-h1 { color: var(--header); font-weight: 700; }

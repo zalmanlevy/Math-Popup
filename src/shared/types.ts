@@ -11,13 +11,15 @@ export interface Page {
   id: string;
   title: string;
   content: string;
-  mode: Mode;
+  mode: Mode;              // legacy per-page mode; kept for migration + as the seed for lineModes
+  lineModes?: Mode[];      // per-line mode, parallel to content's lines ('text' by default)
 }
 
 export interface Settings {
   mode: Mode;                     // 'math' = full evaluator + gutters; 'text' = plain notepad
   launchAtStartup: boolean;       // start with Windows; opens hidden in the tray
   showTaskbarIcon: boolean;       // show the window in the Windows taskbar (so it can be pinned); off = tray-only
+  tabBarOpen: boolean;            // whether the tab bar is expanded (remembered across launches)
   suffixes: Suffix[];
   autoFormatNumbers: boolean;     // insert commas on space/operator
   expandSuffixesInEditor: boolean; // 1m -> 1,000,000 in textarea
@@ -40,6 +42,7 @@ export const DEFAULT_SETTINGS: Settings = {
   mode: 'math',
   launchAtStartup: true,
   showTaskbarIcon: false,
+  tabBarOpen: false,
   suffixes: [
     { symbol: 'k', multiplier: 1_000, caseSensitive: false },
     { symbol: 'm', multiplier: 1_000_000, caseSensitive: false },

@@ -15,7 +15,7 @@
 //     COUNT, MEDIAN, ROUND, CEIL, FLOOR, ABS, IF, TODAY, NOW, SQRT)
 
 import { create, all, type MathJsInstance } from 'mathjs';
-import { Suffix } from '../shared/types';
+import { Suffix, Mode } from '../shared/types';
 import { formatResult, stripNumberCommas } from './formatter';
 
 const math: MathJsInstance = create(all, { number: 'number' });
@@ -162,7 +162,8 @@ export function evaluateNote(
   text: string,
   suffixes: Suffix[],
   previous: LineResult[] = [],
-  decimals = 2
+  decimals = 2,
+  lineModes?: Mode[]
 ): LineResult[] {
   const lines = text.split('\n');
   // Iterative evaluation so forward `L<n>` references resolve. Each pass uses
@@ -172,7 +173,7 @@ export function evaluateNote(
   let results: LineResult[] = previous.slice(0, lines.length);
   for (let iter = 0; iter < MAX_ITER; iter++) {
     const snapshot = results;
-    const next = evaluateOnePass(lines, suffixes, snapshot, previous, decimals);
+    const next = evaluateOnePass(lines, suffixes, snapshot, previous, decimals, lineModes);
     if (resultsConverged(next, results)) {
       results = next;
       break;
@@ -187,7 +188,8 @@ function evaluateOnePass(
   suffixes: Suffix[],
   snapshot: LineResult[],
   previous: LineResult[],
-  decimals: number
+  decimals: number,
+  lineModes?: Mode[]
 ): LineResult[] {
   const results: LineResult[] = [];
   const scope: Record<string, number> = {};
@@ -206,6 +208,13 @@ function evaluateOnePass(
 
   for (let i = 0; i < lines.length; i++) {
     const raw = lines[i];
+
+    // Per-line mode: only 'math' lines are evaluated. Text lines are inert (no
+    // result), though the highlighter still styles their markdown.
+    if (lineModes && lineModes[i] !== 'math') {
+      results.push({ index: i, kind: 'text', raw, display: '' });
+      continue;
+    }
 
     // `/no_dec_limit` directive: from this line down, switch to a 6-decimal
     // cap (overrides the user's settings.decimals). The directive line itself

@@ -1,7 +1,7 @@
 import { app } from 'electron';
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'node:fs';
 import { dirname, join } from 'node:path';
-import { DEFAULT_SETTINGS, Settings } from '../shared/types';
+import { DEFAULT_SETTINGS, Settings, Mode } from '../shared/types';
 
 let cache: Settings | null = null;
 let saveTimer: NodeJS.Timeout | null = null;
@@ -22,6 +22,15 @@ function migrateSettings(settings: Settings): Settings {
   }
   if (!settings.closedPages) {
     settings.closedPages = [];
+  }
+  // Per-line modes: seed from the legacy per-page mode so existing notes keep
+  // behaving the same (a 'math' page becomes all-math lines, otherwise text).
+  for (const p of settings.pages) {
+    if (!Array.isArray(p.lineModes)) {
+      const n = Math.max(1, (p.content ?? '').split('\n').length);
+      const seed: Mode = p.mode === 'math' ? 'math' : 'text';
+      p.lineModes = Array.from({ length: n }, () => seed);
+    }
   }
   return settings;
 }
