@@ -38,13 +38,14 @@
     <div class="editor-stack">
       <pre id="find-layer" class="find-layer" aria-hidden="true"></pre>
       <pre id="syntax-overlay" class="syntax-overlay" aria-hidden="true"></pre>
-      <textarea id="editor"
-                class="editor"
-                spellcheck="false"
-                autocomplete="off"
-                autocorrect="off"
-                autocapitalize="off"
-                wrap="soft"></textarea>
+      <div id="editor"
+           class="editor"
+           contenteditable="true"
+           spellcheck="false"
+           autocorrect="off"
+           autocapitalize="off"
+           role="textbox"
+           aria-multiline="true"></div>
       <div id="measure" class="measure" aria-hidden="true"></div>
       <div id="result-overlay" class="result-overlay" aria-hidden="true"></div>
     </div>

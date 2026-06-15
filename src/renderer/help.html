@@ -15,7 +15,7 @@
     <a href="#overview">Overview</a>
     <a href="#window">Window controls</a>
     <a href="#tabs">Tabs</a>
-    <a href="#modes">Math &amp; text modes</a>
+    <a href="#modes">Math &amp; text lines</a>
     <a href="#numbers">Numbers &amp; formatting</a>
     <a href="#currency">Currency symbols</a>
     <a href="#quoted">Quoted text (notes)</a>
@@ -25,6 +25,7 @@
     <a href="#variables">Variables</a>
     <a href="#varspopup">Variables popup (ƒ)</a>
     <a href="#linerefs">Line references</a>
+    <a href="#textrefs">Reference math from text</a>
     <a href="#lineranges">Line ranges (L1:L4)</a>
     <a href="#xoperator">x as multiplication</a>
     <a href="#percent">Percent &amp; basis points</a>
@@ -46,11 +47,11 @@
   <main>
     <section id="overview">
       <h2>Overview</h2>
-      <p>Math Popup is a small always-available notepad. Each line is evaluated
-        as a math expression and the result appears in the right gutter. You can
-        use it like a back-of-the-envelope calculator that keeps a running
-        history, or switch it into plain Text mode and use it as a tray-resident
-        scratchpad.</p>
+      <p>Math Popup is a small always-available notepad. By default every line is
+        plain text, so it works as a tray-resident scratchpad out of the box. Mark
+        any individual line as <strong>math</strong> and it's evaluated live, with
+        the result shown right on the line — so a single note can freely mix prose,
+        lists, and calculations.</p>
       <p>The window lives in the system tray. Click the tray icon to toggle it,
         or press <kbd>Ctrl</kbd>+<kbd>Alt</kbd>+<kbd>M</kbd> from anywhere.</p>
     </section>
@@ -63,8 +64,6 @@
           and add, rename, reorder, or close them. See <a href="#tabs">Tabs</a> below.</li>
         <li><strong>🕒 Recently Closed</strong> — reopen a tab you closed by
           mistake. Hover to see the list of recently closed notes.</li>
-        <li><strong>∑ Math / Text</strong> — switch the editor between math
-          evaluation and plain text. The icon reflects the current mode.</li>
         <li><strong>Drag handle</strong> — click and drag anywhere in the empty
           part of the header to move the window.</li>
         <li><strong>📌 Pin</strong> — keep the window above other apps. Highlights when active.</li>
@@ -82,9 +81,10 @@
 
     <section id="tabs">
       <h2>Tabs</h2>
-      <p>Keep several independent notes open at once, each with its own content
-        and Math/Text mode. Click <strong>📄</strong> in the header to toggle the
-        tab bar that slides in just below the toolbar.</p>
+      <p>Keep several independent notes open at once, each with its own content.
+        Click <strong>📄</strong> in the header to toggle the tab bar that slides
+        in just below the toolbar; whether it's expanded is remembered between
+        launches.</p>
       <ul>
         <li><strong>Switch</strong> — click a tab, or cycle with
           <kbd>Ctrl</kbd>+<kbd>Tab</kbd> /
@@ -104,20 +104,44 @@
           rest. If the tab you're on lives in the overflow, it's surfaced into
           the bar with a small divider so you can always see where you are.</li>
       </ul>
-      <p><strong>Restore a closed tab.</strong> Press <kbd>Ctrl</kbd>+<kbd>Z</kbd>
-        immediately after closing a tab to bring it back, or open the
-        <strong>🕒 Recently Closed</strong> list in the header and pick one.</p>
+      <p><strong>Restore a closed tab.</strong> Press
+        <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>T</kbd> to reopen the most recently
+        closed tab — press it again to keep reopening older ones. You can also
+        press <kbd>Ctrl</kbd>+<kbd>Z</kbd> immediately after closing a tab to bring
+        it back, or open the <strong>🕒 Recently Closed</strong> list in the
+        header and pick one.</p>
     </section>
 
     <section id="modes">
-      <h2>Math &amp; text modes</h2>
-      <p><strong>Math mode</strong> shows two gutters: line numbers on the left
-        (<code>L1</code>, <code>L2</code>, …) and the evaluated result on the
-        right. Syntax highlighting colors numbers, operators, variables, line
-        refs, parentheses, and percent signs.</p>
-      <p><strong>Text mode</strong> hides the result column and turns off math
-        evaluation. Markdown styling (headers, bullets, bold, italic) still
-        renders so you can take notes comfortably.</p>
+      <h2>Math &amp; text lines</h2>
+      <p>Every line is <strong>text</strong> by default. Mark an individual line
+        as <strong>math</strong> and it's evaluated, with its result shown inline.
+        A note can mix the two freely — prose and lists stay text while the lines
+        you care about compute.</p>
+      <p><strong>Make a line math (or text again)</strong> in either of these ways:</p>
+      <ul>
+        <li><strong>Double-click its line number</strong> in the left gutter to
+          toggle that line between math and text.</li>
+        <li>Type <code>/math</code> or <code>/text</code> on the line and press
+          <kbd>Space</kbd> or <kbd>Enter</kbd> — the command word is removed and
+          the line switches. (They're also in the slash menu.)</li>
+      </ul>
+      <p><strong>The line number shows the type:</strong> math lines get a green,
+        underlined number; the line your cursor is on is filled in (green for
+        math, grey for text).</p>
+      <p><strong>Wrapped lines are marked.</strong> When a line is long enough to
+        wrap onto more than one row, a faint marker beside its number grows from a
+        small dot into a short bar spanning the wrapped rows — so you can tell at a
+        glance that those rows are one continued line.</p>
+      <p><strong>Enter carries the type forward.</strong> Pressing <kbd>Enter</kbd>
+        makes the new line match the line you came from, so a run of math lines
+        stays math until you switch one back to text (and vice-versa).</p>
+      <p><strong>The result is inline.</strong> A math line's answer appears as a
+        green <code>= …</code> pinned to the right, and the <code>=</code> signs
+        line up in a column. Hover it (or put your cursor on that line) to
+        highlight it, and click to copy the value. A long formula wraps before the
+        result instead of running underneath it, and any error shows right after
+        the <code>=</code>.</p>
     </section>
 
     <section id="numbers">
@@ -125,9 +149,15 @@
       <ul>
         <li>Type any expression: <code>(12 + 5) * 3</code> → <code>51</code>.</li>
         <li>Bare decimals get a leading zero automatically: <code>.5</code> → <code>0.5</code>.</li>
-        <li>Numbers with 4+ digits get commas inserted on space, operator, or Enter:
-          <code>1000</code> → <code>1,000</code>. Toggleable in Settings.</li>
-        <li>Commas in input are ignored when evaluating, so <code>1,000 + 1,000</code> works.</li>
+        <li>Numbers with 4+ digits get commas inserted on space, operator, Enter,
+          or <kbd>Tab</kbd>: <code>1000</code> → <code>1,000</code>. Toggleable in Settings.</li>
+        <li>Commas in a number are purely cosmetic — their position doesn't
+          matter, so <code>1,000</code>, <code>10,00</code>, and a half-typed
+          <code>10,000,</code> all evaluate the same. (Commas that separate
+          function arguments, like <code>min(1, 2)</code>, are still respected.)</li>
+        <li>Pressing <kbd>Space</kbd> or <kbd>Tab</kbd> with the cursor in a number
+          re-tidies its commas and hops to a single space after it — reusing the
+          space that's already there instead of adding a second.</li>
         <li>Results are formatted with commas and trimmed to your decimal cap.</li>
       </ul>
     </section>
@@ -155,7 +185,7 @@
         <li><code>5 * 2 '234'</code> → <code>10</code> (the quoted part is dropped)</li>
         <li><code>1000 + 250  "deposit"</code> → <code>1,250</code></li>
         <li><code>'Invoice 1291 — confirm it's 1.9'</code> → no result; the whole
-          line is just a note (it shows blank in the result column rather than
+          line is just a note (it shows blank — no result — rather than
           echoing the text).</li>
       </ul>
       <p>Two conveniences make this painless:</p>
@@ -194,14 +224,18 @@
 
     <section id="slashmenu">
       <h2>Slash command menu</h2>
-      <p>Type <code>/</code> at the start of any line and a popup appears with
-        all available slash commands. Continue typing to filter, use
+      <p>Type <code>/</code> anywhere a word can start — at the beginning of a
+        line or right after a space — and a popup appears with the available
+        commands. (A <code>/</code> used as division, like <code>5/2</code>,
+        doesn't trigger it.) Continue typing to filter, use
         <kbd>↑</kbd>/<kbd>↓</kbd> to move, and <kbd>Enter</kbd> or click to
         confirm. <kbd>Esc</kbd> dismisses it.</p>
       <p>The menu also flips above the caret when there isn't enough room
         below, and shows up to 5 items at a time (longer lists scroll).</p>
-      <p>Available commands today: <code>/no_dec_limit</code> and
-        <code>/clear</code> — see the Directives section above.</p>
+      <p>Available commands: <code>/math</code> and <code>/text</code> (switch the
+        line's type — see <a href="#modes">Math &amp; text lines</a>),
+        <code>/no_dec_limit</code>, and <code>/clear</code> — the latter two are
+        covered under Directives above.</p>
     </section>
 
     <section id="suffixes">
@@ -235,7 +269,7 @@ price * qty</code></pre>
         with a letter or underscore. Reserved names like <code>L1</code>,
         <code>pi</code>, <code>e</code>, <code>true</code>, and <code>false</code>
         cannot be redefined — trying to assign to one shows
-        <strong>Reserved</strong> in the result column with a hover tooltip.</p>
+        <strong>Reserved</strong> after the <code>=</code> with a hover tooltip.</p>
     </section>
 
     <section id="varspopup">
@@ -271,11 +305,12 @@ L1 * 0.07</code></pre>
         a numeric result, e.g. <code>L1: 1,250</code>. Use the arrow keys to
         navigate, <kbd>Enter</kbd> or click to insert the reference. The
         popup follows the same flip-above / 5-item rules as the slash menu.</p>
-      <p><strong>Click a line number to insert its ref.</strong> The numbers in
-        the left gutter are buttons — they highlight when you hover. Click one
-        and its <code>L&lt;n&gt;</code> drops in at the cursor. Inside an
-        Excel-style function, clicking several line numbers in a row separates
-        them with commas automatically
+      <p><strong>Single-click a line number to insert its ref.</strong> The
+        numbers in the left gutter are buttons. Single-click one and its
+        <code>L&lt;n&gt;</code> drops in at the cursor — <em>double-click</em>
+        instead toggles that line between math and text. Inside an Excel-style
+        function, clicking several line numbers in a row separates them with
+        commas automatically
         (<code>SUM(</code> → click L1, L2, L3 → <code>SUM(L1, L2, L3)</code>);
         anywhere else it just inserts the bare ref so you supply the operators.</p>
       <p><strong>Empty lines count as 0.</strong> A reference to a blank line (or
@@ -290,6 +325,19 @@ L1 * 0.07</code></pre>
         line, every <code>L&lt;n&gt;</code> reference (including ranges like
         <code>L1:L4</code>) on surrounding lines is rewritten so they keep
         pointing at the same target.</p>
+    </section>
+
+    <section id="textrefs">
+      <h2>Reference math from text</h2>
+      <p>You can pull a math line's result into a plain <em>text</em> line by
+        wrapping the line reference in double quotes — <code>""L1""</code>. It
+        renders as that line's live value and updates automatically whenever the
+        source line changes:</p>
+      <pre><code>running total so far: ""L13""</code></pre>
+      <p>Put your cursor on the line to reveal the raw <code>""L1""</code> for
+        editing; move off the line and it shows the result again. If the
+        referenced line has no value yet, the raw token stays visible as a
+        placeholder.</p>
     </section>
 
     <section id="lineranges">
@@ -314,7 +362,7 @@ AVERAGE(L1:L3)    → 20</code></pre>
         <li><code>$25 x 4</code> → <code>100</code></li>
       </ul>
       <p>Because <code>x</code> is reserved as an operator, you can't define
-        a variable called <code>x</code>. If you try, the result column
+        a variable called <code>x</code>. If you try, the result
         shows <strong>error</strong> with a hover tooltip explaining why.</p>
     </section>
 
@@ -364,8 +412,8 @@ AVERAGE(L1:L3)    → 20</code></pre>
       </table>
       <p>An Excel function is only treated as a call when it's directly
         followed by <code>(</code>. Trying to use the name as a variable
-        (e.g. <code>sum = 5</code>) shows <strong>Excel Formula</strong> in
-        red in the result column with a hover tooltip listing every formula.</p>
+        (e.g. <code>sum = 5</code>) shows <strong>Excel Formula</strong> after
+        the <code>=</code> with a hover tooltip listing every formula.</p>
       <p><strong>Live signature tooltip:</strong> while you're typing inside
         a function call, a small box near the caret shows the function
         name, parameter list (with the current argument bolded in blue),
@@ -391,7 +439,7 @@ AVERAGE(L1:L3)    → 20</code></pre>
           truthy and <code>"FALSE"</code> otherwise:
           <code>IF(L1=L2)</code> → <code>TRUE</code> or <code>FALSE</code>.</li>
         <li><strong>Other strings need quotes.</strong> If you write
-          <code>IF(L1=L2, YES, NO)</code> the result column shows red
+          <code>IF(L1=L2, YES, NO)</code> the result shows
           <strong>err</strong> with a hover tooltip "Add Quotations" — wrap
           the values: <code>IF(L1=L2, "YES", "NO")</code>.</li>
       </ul>
@@ -432,9 +480,10 @@ AVERAGE(L1:L3)    → 20</code></pre>
 
     <section id="errors">
       <h2>Error indicators</h2>
-      <p>Problems are shown calmly in the <em>result column</em> only — the
-        editor line itself is never highlighted or underlined in red, so typing
-        stays quiet. Hover any marker for a tooltip explaining the issue.</p>
+      <p>Problems are shown calmly in the <em>inline result</em> (right after the
+        green <code>=</code>) only — the editor line itself is never highlighted
+        or underlined in red, so typing stays quiet. Hover any marker for a
+        tooltip explaining the issue.</p>
       <p>There are just two visual styles:</p>
       <ul>
         <li><strong>N/A</strong> — a soft grey placeholder for a line that's
@@ -499,7 +548,7 @@ AVERAGE(L1:L3)    → 20</code></pre>
       <p>Light markdown styling renders inline:</p>
       <ul>
         <li><code># Heading</code>, <code>## Heading</code>, <code>### Heading</code> — header lines are not evaluated.</li>
-        <li><code>- item</code> or <code>* item</code> — bulleted line. The content after the bullet is still evaluated as math (in math mode).</li>
+        <li><code>- item</code> or <code>* item</code> — bulleted line. On a math line the content after the bullet is still evaluated. <kbd>Enter</kbd> continues the list, and <kbd>Tab</kbd> / <kbd>Shift</kbd>+<kbd>Tab</kbd> indent / outdent the item.</li>
         <li><code>**bold**</code> and <code>*italic*</code> — inline emphasis.</li>
       </ul>
     </section>
@@ -513,16 +562,18 @@ AVERAGE(L1:L3)    → 20</code></pre>
           <tr><td><kbd>F3</kbd> / <kbd>Shift</kbd>+<kbd>F3</kbd></td><td>Find next / previous match</td></tr>
           <tr><td><kbd>Ctrl</kbd>+<kbd>T</kbd></td><td>New tab</td></tr>
           <tr><td><kbd>Ctrl</kbd>+<kbd>W</kbd></td><td>Close the current tab</td></tr>
+          <tr><td><kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>T</kbd></td><td>Reopen the most recently closed tab (press again for older ones)</td></tr>
           <tr><td><kbd>Ctrl</kbd>+<kbd>L</kbd></td><td>Rename the current tab</td></tr>
           <tr><td><kbd>Ctrl</kbd>+<kbd>Tab</kbd> / <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>Tab</kbd></td><td>Next / previous tab</td></tr>
           <tr><td><kbd>Ctrl</kbd>+<kbd>Z</kbd></td><td>Undo — or restore the just-closed tab if closing one was your last action</td></tr>
           <tr><td><kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>Z</kbd> / <kbd>Ctrl</kbd>+<kbd>Y</kbd></td><td>Redo</td></tr>
           <tr><td><kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>C</kbd></td><td>Copy the current line's numeric result</td></tr>
           <tr><td><kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>M</kbd></td><td>Copy the whole note as markdown with results inline</td></tr>
-          <tr><td><kbd>Tab</kbd></td><td>Smart-jump past the current number (including suffix), inserting a trailing space and reformatting</td></tr>
+          <tr><td><kbd>Tab</kbd></td><td>Math line: tidy the current number's commas and jump past it to a single trailing space, suffix included (<kbd>Space</kbd> in a number does the same). Text list item: indent it (<kbd>Shift</kbd>+<kbd>Tab</kbd> outdents)</td></tr>
+          <tr><td><kbd>Enter</kbd></td><td>Continues a list item; the new line keeps the current line's math/text type</td></tr>
           <tr><td><kbd>↑</kbd> / <kbd>↓</kbd> / <kbd>Enter</kbd></td><td>Navigate / confirm in the slash and L popups</td></tr>
           <tr><td><kbd>Esc</kbd></td><td>Close the Find bar or an open popup; otherwise hide the window</td></tr>
-          <tr><td><kbd>Space</kbd> / operator / <kbd>Enter</kbd></td><td>Triggers auto-format and suffix expansion</td></tr>
+          <tr><td><kbd>Space</kbd> / operator / <kbd>Enter</kbd></td><td>Triggers auto-format and suffix expansion. In a number, <kbd>Space</kbd> also hops past it to a single trailing space (reusing one if it's already there) instead of adding a second</td></tr>
         </tbody>
       </table>
     </section>
@@ -562,12 +613,18 @@ AVERAGE(L1:L3)    → 20</code></pre>
           scheme.</li>
         <li><strong>Launch when Windows starts</strong> — auto-start hidden in
           the tray.</li>
+        <li><strong>Show taskbar icon</strong> — also show the window in the
+          Windows taskbar so you can pin it and use it like a normal app. Off by
+          default (it stays a tray-only app otherwise).</li>
         <li><strong>Auto-format numbers with commas</strong> — adds thousands
           separators as you type.</li>
         <li><strong>Expand suffixes in editor</strong> — turns <code>5m</code>
           into <code>5,000,000</code> on space. Off keeps the typed form.</li>
         <li><strong>Max decimal places</strong> — caps how many decimals are
           shown in results. Integers omit the decimal point entirely.</li>
+        <li><strong>Default zoom</strong> — the zoom level the popup opens at.
+          <kbd>Ctrl</kbd>+<kbd>0</kbd> returns to it; <kbd>Ctrl</kbd>+scroll or
+          <kbd>Ctrl</kbd>+<kbd>+</kbd>/<kbd>−</kbd> adjust it on the fly.</li>
         <li><strong>Custom suffixes</strong> — add your own multipliers (e.g.
           <code>x</code> = 1000, <code>kg</code> = 1, etc.). Each row has a
           symbol, multiplier, and case-sensitive toggle.</li>

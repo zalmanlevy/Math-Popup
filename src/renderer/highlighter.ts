@@ -36,10 +36,11 @@ export function highlightNote(text: string, lineResults: LineResult[], lineModes
       const r = lineResults[i];
       const mode: Mode = lineModes[i] ?? 'text';
       const tokens = tokenizeLine(line, r, ctx, mode, activeToken, lineResults, i === caretLine);
-      // Each line wrapped in its own block element so layoutGutters can read
-      // per-line rendered heights (handles wrap accurately because the overlay
-      // shares width/font/wrap rules with the editor).
-      return `<div class="ov-line">${tokens || '&#8203;'}</div>`;
+      // Each line is its own block so layoutGutters can read per-line heights and
+      // so each line wraps independently: math lines get .ov-math (reserving the
+      // answer column via right padding) while text lines use the full width.
+      const cls = mode === 'math' ? 'ov-line ov-math' : 'ov-line';
+      return `<div class="${cls}">${tokens || '&#8203;'}</div>`;
     })
     .join('');
 }

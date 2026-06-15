@@ -29,7 +29,29 @@ export function formatWithCommas(intStr: string): string {
   return negative ? `-${out}` : out;
 }
 
-// Strip commas inside number-like sequences. Used by the evaluator preprocessor.
+// Strip thousands-separator commas so they're purely visual — their position in
+// a number doesn't matter (1,234, 10,000,99, 10,000, all collapse to plain
+// digits). Paren-aware so function arguments survive:
+//   - At the TOP level a comma right after a digit can only be a (visual)
+//     thousands separator, so it's always dropped — wherever it sits.
+//   - INSIDE a function call's parens a comma after a digit might separate
+//     arguments, so we only drop it when it's clearly a thousands group
+//     (followed by 3+ digits). That keeps min(1,2), round(3.14,2), min(5,-3),
+//     while still collapsing sum(1,000,000, 2,000) -> sum(1000000, 2000).
+// Used by the evaluator preprocessor.
 export function stripNumberCommas(s: string): string {
-  return s.replace(/(\d),(?=\d{3}(?!\d))/g, '$1');
+  let out = '';
+  let depth = 0;
+  for (let i = 0; i < s.length; i++) {
+    const ch = s[i];
+    if (ch === '(') depth++;
+    else if (ch === ')') { if (depth > 0) depth--; }
+    if (ch === ',' && i > 0 && /\d/.test(s[i - 1])) {
+      if (depth === 0) continue;                    // top level: always visual → drop
+      if (/^\d{3}/.test(s.slice(i + 1))) continue;  // inside (): thousands group → drop
+      // otherwise inside (): argument separator → keep
+    }
+    out += ch;
+  }
+  return out;
 }

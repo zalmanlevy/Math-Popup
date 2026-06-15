@@ -29,6 +29,201 @@ const findPrevBtn = document.getElementById('find-prev') as HTMLButtonElement;
 const findNextBtn = document.getElementById('find-next') as HTMLButtonElement;
 const findCloseBtn = document.getElementById('find-close') as HTMLButtonElement;
 
+// ============================================================
+// Contenteditable editor engine (per-line blocks)
+// ------------------------------------------------------------
+// The editor is a contenteditable <div> whose children are one ".ed-line" block
+// per logical line. Each block carries its OWN right padding (math lines reserve
+// the answer column; text lines use the full width) — that per-line padding is
+// how each line wraps independently, which a single <textarea> can't do. We keep
+// a plain string as the source of truth (edValue) and expose a textarea-shaped
+// API (value, selectionStart/End, setSelectionRange, setRangeText) on the div so
+// the rest of the app — undo, find, the slash menu, list logic, ~170 call sites —
+// keeps working unchanged.
+// ============================================================
+const ed = editor as unknown as HTMLDivElement;
+let edValue = '';
+let edCaretStart = 0;
+let edCaretEnd = 0;
+let edComposing = false;
+
+function edFirstTextNode(el: HTMLElement): Text | null {
+  for (const c of Array.from(el.childNodes)) if (c.nodeType === Node.TEXT_NODE) return c as Text;
+  return null;
+}
+
+// Build the editor DOM: one .ed-line per line. The per-line math/text class is
+// applied by applyEditorLineModes() once lineModes are known.
+function buildEditorDOM(text: string) {
+  const lines = text.split('\n');
+  let html = '';
+  for (let i = 0; i < lines.length; i++) {
+    html += `<div class="ed-line">${lines[i].length ? escapeHtml(lines[i]) : '<br>'}</div>`;
+  }
+  // Replacing innerHTML resets the element's scrollTop to 0; preserve it so the
+  // view doesn't jump to the top on every keystroke when the note is scrolled.
+  const st = ed.scrollTop;
+  ed.innerHTML = html;
+  ed.scrollTop = st;
+  edValue = text;
+  applyEditorLineModes();
+}
+
+// Toggle the per-line math class on existing .ed-line blocks. Cheap and does not
+// rebuild text, so it never disturbs the caret.
+function applyEditorLineModes() {
+  const divs = ed.children;
+  for (let i = 0; i < divs.length; i++) {
+    (divs[i] as HTMLElement).classList.toggle('ed-math', lineModeAt(i) === 'math');
+  }
+}
+
+// Gather a block's text and, if the selection focus is inside it, its local
+// offset. Tolerates the shallow DOM the browser leaves after one native edit.
+function edGatherLine(root: Node, focusNode: Node | null, focusOffset: number): { text: string; caret: number } {
+  let text = '';
+  let caret = -1;
+  const walk = (n: Node) => {
+    for (const c of Array.from(n.childNodes)) {
+      if (c.nodeType === Node.TEXT_NODE) {
+        if (c === focusNode) caret = text.length + Math.min(focusOffset, (c as Text).length);
+        text += (c as Text).data;
+      } else if (c.nodeName === 'BR') {
+        if (c === focusNode) caret = text.length;
+      } else if (c.nodeType === Node.ELEMENT_NODE) {
+        if (c === focusNode) caret = text.length + (focusOffset === 0 ? 0 : (c.textContent ?? '').length);
+        walk(c);
+      }
+    }
+  };
+  walk(root);
+  return { text, caret };
+}
+
+// Read the (possibly browser-mutated) editor DOM back into a flat string + caret
+// offset. Top-level blocks are the lines, joined by "\n".
+function readEditorDOM(focusNode: Node | null, focusOffset: number): { text: string; caret: number } {
+  const blocks = Array.from(ed.children) as HTMLElement[];
+  if (blocks.length === 0) {
+    const t = ed.textContent ?? '';
+    return { text: t, caret: Math.min(focusOffset, t.length) };
+  }
+  let text = '';
+  let caret = -1;
+  for (let i = 0; i < blocks.length; i++) {
+    if (i > 0) text += '\n';
+    const lineStart = text.length;
+    const block = blocks[i];
+    if (block === focusNode) caret = lineStart + (focusOffset === 0 ? 0 : (block.textContent ?? '').length);
+    const g = edGatherLine(block, focusNode, focusOffset);
+    if (g.caret >= 0) caret = lineStart + g.caret;
+    text += g.text;
+  }
+  if (caret < 0) caret = text.length;
+  return { text, caret };
+}
+
+// Map a flat offset to a DOM point inside the CURRENT (clean) editor structure.
+function edOffsetToPoint(offset: number): { node: Node; offset: number } {
+  const blocks = Array.from(ed.children) as HTMLElement[];
+  let acc = 0;
+  for (let i = 0; i < blocks.length; i++) {
+    const tn = edFirstTextNode(blocks[i]);
+    const len = tn ? tn.length : 0;
+    if (offset <= acc + len) {
+      if (tn) return { node: tn, offset: Math.max(0, offset - acc) };
+      return { node: blocks[i], offset: 0 };   // empty line (<br> placeholder)
+    }
+    acc += len + 1;   // + the "\n" after this line
+  }
+  const last = blocks[blocks.length - 1];
+  if (last) {
+    const tn = edFirstTextNode(last);
+    if (tn) return { node: tn, offset: tn.length };
+    return { node: last, offset: 0 };
+  }
+  return { node: ed, offset: 0 };
+}
+
+function edClamp(n: number): number {
+  return Math.max(0, Math.min(n, edValue.length));
+}
+
+function edSetSelection(start: number, end: number) {
+  const sel = window.getSelection();
+  if (!sel) return;
+  const s = edOffsetToPoint(edClamp(start));
+  const e = edOffsetToPoint(edClamp(end));
+  const range = document.createRange();
+  range.setStart(s.node, s.offset);
+  try { range.setEnd(e.node, e.offset); } catch { range.setEnd(s.node, s.offset); }
+  sel.removeAllRanges();
+  sel.addRange(range);
+  edCaretStart = edClamp(start);
+  edCaretEnd = edClamp(end);
+}
+
+// Refresh the cached offsets from the live selection (after native caret moves:
+// clicks, arrows, drag-selection).
+function edRefreshSelectionCache() {
+  const sel = window.getSelection();
+  if (!sel || sel.rangeCount === 0 || !sel.anchorNode || !ed.contains(sel.anchorNode)) return;
+  const a = readEditorDOM(sel.anchorNode, sel.anchorOffset).caret;
+  const f = readEditorDOM(sel.focusNode, sel.focusOffset).caret;
+  edCaretStart = Math.min(a, f);
+  edCaretEnd = Math.max(a, f);
+}
+
+// The 'input' handler: adopt the natively-edited DOM as the new value, normalize
+// it back to clean .ed-line blocks, restore the caret, then run the existing
+// input pipeline (which reads editor.value / .selectionStart through the shim).
+function onEditorInput() {
+  if (edComposing) return;   // mid-IME: wait for compositionend
+  const sel = window.getSelection();
+  const fNode = sel && sel.rangeCount ? sel.focusNode : null;
+  const fOff = sel ? sel.focusOffset : 0;
+  const read = readEditorDOM(fNode, fOff);
+  edValue = read.text;
+  // Update the caret cache BEFORE syncLineModes: it reads caretLineIndex() to
+  // decide which line is newly inserted (so Enter inherits the right mode). If
+  // the cache still held the pre-edit caret, a new line would inherit from the
+  // wrong neighbor — e.g. pressing Enter under a math line would flip the line
+  // you were on back to math.
+  edCaretStart = edCaretEnd = read.caret;
+  syncLineModes();              // align lineModes to the new text before rebuilding
+  buildEditorDOM(read.text);    // normalize to clean blocks (+ math classes)
+  edSetSelection(read.caret, read.caret);
+  onInput();                    // existing pipeline: refs, undo, render(), menus
+}
+
+// Expose a <textarea>-compatible surface on the div so existing code is unchanged.
+Object.defineProperties(ed, {
+  value: {
+    get() { return edValue; },
+    set(v: string) { buildEditorDOM(v == null ? '' : String(v)); },
+    configurable: true,
+  },
+  selectionStart: {
+    get() { return edCaretStart; },
+    set(v: number) { edSetSelection(v, Math.max(v, edCaretEnd)); },
+    configurable: true,
+  },
+  selectionEnd: {
+    get() { return edCaretEnd; },
+    set(v: number) { edSetSelection(Math.min(edCaretStart, v), v); },
+    configurable: true,
+  },
+});
+(ed as any).setSelectionRange = (s: number, e: number) => edSetSelection(s, e ?? s);
+(ed as any).setRangeText = (replacement: string, start?: number, end?: number, selectMode?: string) => {
+  const s = start ?? edCaretStart;
+  const e = end ?? edCaretEnd;
+  buildEditorDOM(edValue.slice(0, s) + replacement + edValue.slice(e));
+  if (selectMode === 'select') edSetSelection(s, s + replacement.length);
+  else if (selectMode === 'start') edSetSelection(s, s);
+  else edSetSelection(s + replacement.length, s + replacement.length);
+};
+
 let settings: Settings;
 let closedPages: Page[] = [];
 let pages: Page[] = [];
@@ -171,7 +366,11 @@ function applyTheme(theme: ThemePref) {
 }
 
 function bindEvents() {
-  editor.addEventListener('input', onInput);
+  editor.addEventListener('input', onEditorInput);
+  // IME: don't normalize the DOM mid-composition (it would cancel the IME);
+  // process once on compositionend.
+  editor.addEventListener('compositionstart', () => { edComposing = true; });
+  editor.addEventListener('compositionend', () => { edComposing = false; onEditorInput(); });
   editor.addEventListener('scroll', syncScroll);
   editor.addEventListener('keydown', onKeyDown);
   editor.addEventListener('blur', () => {
@@ -181,12 +380,14 @@ function bindEvents() {
     }, 100);
     hideSignatureTooltip();
   });
-  editor.addEventListener('click', () => { updateMenuFromCaret(true); updateActiveToken(); });
+  editor.addEventListener('click', () => { edRefreshSelectionCache(); updateMenuFromCaret(true); updateActiveToken(); });
   // Re-render when the caret moves to a different line, so the per-line ref
   // display (raw "" L# "" vs the live result), the active-answer highlight, and
-  // the current-line number highlight all stay correct.
+  // the current-line number highlight all stay correct. Refresh the cached
+  // offsets first, since the browser moved the caret natively.
   document.addEventListener('selectionchange', () => {
     if (document.activeElement !== editor) return;
+    edRefreshSelectionCache();
     if (caretLineIndex() !== lastCaretLine) render();
   });
   // Line-number gutter: click a number to drop its L-ref at the caret. Using
@@ -788,6 +989,8 @@ function ensureCaretLineVisible() {
   } else if (lineTop < viewTop) {
     editor.scrollTop = lineTop;
   }
+  // Keep the overlays aligned with whatever scroll position we just landed on.
+  syncScroll();
 }
 
 function scheduleSave() {
@@ -1377,6 +1580,14 @@ function onKeyDown(e: KeyboardEvent) {
     }
   }
 
+  // Ctrl+Shift+T reopens the most recently closed tab (browser-style, and
+  // repeatable — each press restores the next one back).
+  if (e.ctrlKey && e.shiftKey && !e.altKey && !e.metaKey && (e.key === 't' || e.key === 'T')) {
+    e.preventDefault();
+    if (closedPages.length > 0) restoreTab(0);
+    return;
+  }
+
   // Ctrl+Tab (next tab) and Ctrl+Shift+Tab (prev tab)
   if (e.ctrlKey && !e.altKey && !e.metaKey && (e.key === 'Tab' || e.code === 'Tab')) {
     e.preventDefault();
@@ -1453,6 +1664,17 @@ function onKeyDown(e: KeyboardEvent) {
     e.preventDefault();
     handleSmartTab();
     return;
+  }
+
+  // Space behaves like smart Tab when the caret is in/after a number: update the
+  // commas and hop to just past the number's SINGLE trailing space — reusing an
+  // existing space instead of doubling it, or adding one if there isn't any. So
+  // editing in the middle of a number and pressing space (or Tab) lands you
+  // after the one space. When the caret isn't in a number, handleSmartTab
+  // returns false and the space types normally (incl. the usual auto-format).
+  if (currentMode() === 'math' && e.key === ' ' &&
+      !e.ctrlKey && !e.shiftKey && !e.altKey && !e.metaKey) {
+    if (handleSmartTab()) { e.preventDefault(); return; }
   }
 
   // Auto-format / suffix-expansion triggers: space, operators, Enter, comma
@@ -1788,8 +2010,13 @@ function formatUnquotedSpan(span: string, suffixes: Suffix[], opts: FmtOpts): st
     out = out.replace(/(^|[^A-Za-z0-9_,.])(-?\d{4,}(?:\.\d+)?)(?![\d.])/g, (_m, lead, num) => {
       return `${lead}${commifyNumber(num)}`;
     });
-    // Re-comma-ize numbers that already contain commas in case they were edited.
-    out = out.replace(/(^|[^A-Za-z0-9_.])(-?\d{1,3}(?:,\d{3})*\d*(?:\.\d+)?)(?![\d.])/g,
+    // Re-comma-ize numbers that already contain commas (incl. ones edited into
+    // the wrong places, e.g. "10,000,99"): match the whole digit/comma run and
+    // regroup it from scratch. Exclude a leading "(" or "," so we never merge a
+    // function's argument list (min(1,2) must stay two args); bare 4+ digit
+    // numbers were already handled just above, so a function's first big
+    // argument still gets its commas.
+    out = out.replace(/(^|[^A-Za-z0-9_.,(])(-?\d[\d,]*(?:\.\d+)?)(?![\d.])/g,
       (_m, lead, num) => `${lead}${commifyNumber(num.replace(/,/g, ''))}`);
   }
 
@@ -1820,14 +2047,21 @@ function formatNumberForEditor(n: number, useCommas: boolean): string {
 function render() {
   // Keep per-line modes aligned to the current text (single choke point).
   syncLineModes();
+  // Mirror those modes onto the editor's line blocks so math lines reserve the
+  // answer column (and text lines use the full width) — the per-line wrap.
+  applyEditorLineModes();
   // Evaluate only the math lines; text lines stay inert (no result) but are
   // still classified so the highlighter can style their markdown. Passing the
   // previous results lets the evaluator carry over last-good values mid-edit.
   lastResults = evaluateNote(editor.value, settings.suffixes, lastResults, settings.decimals, lineModes);
   lastCaretLine = document.activeElement === editor ? caretLineIndex() : -1;
   overlay.innerHTML = highlightNote(editor.value, lastResults, lineModes, activeToken, lastCaretLine);
-  syncScroll();
   layoutGutters();
+  // Sync scroll AFTER rebuilding the overlay + gutters + result overlay — each
+  // innerHTML assignment resets that layer's scrollTop to 0, so syncing earlier
+  // would leave them misaligned until the next scroll event (answers/colors
+  // appearing to "pop in" only once you scroll).
+  syncScroll();
   updateStatus();
   if (findActive) refreshFindAfterEdit();
 }
@@ -1845,27 +2079,75 @@ function syncScroll() {
   }
 }
 
+// Build the inline result overlay HTML: a green "= answer" pinned to the right
+// edge of each math line (errors render after the "="). Rows are transparent
+// and click-through; only the chip itself is interactive (hover to copy).
+function resultRowsHTML(heights: number[], caretLine: number): string {
+  return heights
+    .map((h, i) => {
+      const r = lastResults[i];
+      const blank = `<div class="row" style="height:${h}px"></div>`;
+      if (!r || lineModeAt(i) !== 'math') return blank;
+      const activeCls = i === caretLine ? ' active' : '';   // caret on this math line → highlight its answer
+      if (r.error) {
+        let label = 'error';
+        let errCls = 'err-calm';
+        let tip = r.errorTooltip ?? r.error ?? 'Error';
+        if (r.errorKind === 'incomplete') { label = 'N/A'; errCls = 'err-faint'; tip = r.errorTooltip ?? 'Incomplete expression — keep typing.'; }
+        else if (r.errorKind === 'reserved-excel') { label = 'Excel Formula'; tip = r.errorTooltip ?? EXCEL_FORMULA_TOOLTIP; }
+        else if (r.errorKind === 'duplicate-var') { label = 'Duplicate'; tip = r.errorTooltip ?? DUPLICATE_VAR_TOOLTIP; }
+        else if (r.errorKind === 'reserved-name') { label = 'Reserved'; tip = r.errorTooltip ?? RESERVED_NAME_TOOLTIP; }
+        else if (r.errorKind === 'reserved-x') { tip = r.errorTooltip ?? X_RESERVED_TOOLTIP; }
+        else if (r.errorKind === 'unquoted-string') { tip = r.errorTooltip ?? UNQUOTED_STRING_TOOLTIP; }
+        return `<div class="row" style="height:${h}px"><span class="res ${errCls}${activeCls}" data-tooltip="${escapeAttr(tip)}"><span class="eq">=</span> ${escapeHtml(label)}</span></div>`;
+      }
+      const txt = r.display ?? '';
+      if (txt === '') return blank;
+      const copyable = r.numeric !== undefined || r.stringValue !== undefined;
+      const iconHtml = copyable ? COPY_ICON_HTML : '';
+      const staleCls = r.stale ? ' stale' : '';
+      return `<div class="row" style="height:${h}px"><span class="res${staleCls}${activeCls}"><span class="eq">=</span> ${escapeHtml(txt)}${iconHtml}</span></div>`;
+    })
+    .join('');
+}
+
 function layoutGutters() {
+  // Rebuilding the gutter/result rows below detaches the elements any hover
+  // tooltip is anchored to, so dismiss it now (its mouseleave would never fire).
+  hideTooltip();
   const lines = editor.value.split('\n');
   const caretLine = document.activeElement === editor ? caretLineIndex() : -1;
-  // (heights are read from the overlay's rendered children below)
   const editorStyle = getComputedStyle(editor);
-
   const lineHeight = parseFloat(editorStyle.lineHeight) || 22;
-  const heights: number[] = [];
 
-  // Read per-line heights from the overlay's rendered children. The overlay
-  // shares font/padding/width/wrap rules with the editor, so each .ov-line's
-  // offsetHeight matches the textarea's visual line height (including wrap).
+  // ---- Decide the answer-column width BEFORE measuring line heights ----
+  // The reserve becomes --editor-reserve, which each MATH line uses as its right
+  // padding (.ed-math / .ov-math): math lines wrap before the answer column while
+  // text lines keep the full width. The column is exactly as wide as the widest
+  // answer — never capped — so the full number shows and the copy icon isn't
+  // clipped. First render the chips at placeholder heights to measure the widest.
+  resultOverlay.innerHTML = resultRowsHTML(lines.map(() => lineHeight), caretLine);
+  let naturalChipW = 0;
+  resultOverlay.querySelectorAll<HTMLElement>('.res').forEach(c => {
+    if (c.offsetWidth > naturalChipW) naturalChipW = c.offsetWidth;
+  });
+  const columnW = naturalChipW;
+  const GAP = 16;   // breathing room between a wrapped formula and the answer
+  const reserve = columnW > 0 ? columnW + GAP : 12;
+  document.documentElement.style.setProperty('--editor-reserve', `${reserve}px`);
+
+  // ---- Now read per-line heights, reflecting the reserve just applied. The
+  // overlay shares font/padding/width/wrap rules with the editor, so each
+  // .ov-line's offsetHeight matches the textarea's visual line height. ----
+  const heights: number[] = [];
   const overlayLines = overlay.querySelectorAll<HTMLElement>('.ov-line');
   for (let i = 0; i < lines.length; i++) {
-    const text = lines[i].length === 0 ? ' ' : lines[i];
     const el = overlayLines[i];
     const h = el ? el.offsetHeight : lineHeight;
     heights.push(Math.max(lineHeight, h));
   }
 
-  // Build line-number column
+  // Sync gutter top/bottom padding with the editor's.
   const padTop = parseFloat(editorStyle.paddingTop) || 0;
   const padBot = parseFloat(editorStyle.paddingBottom) || 0;
   lineGutter.style.paddingTop = padTop + 'px';
@@ -1900,49 +2182,24 @@ function layoutGutters() {
       const isHl = activeToken?.type === 'lref' && activeToken.line === i + 1;
       const isMath = lineModeAt(i) === 'math';
       const cls = (isHl ? ' hl-lref' : '') + (isMath ? ' math-line' : '') + (i === caretLine ? ' current' : '');
+      // Every line shows a faint marker just right of its number (drawn by
+      // .line-gutter .row::before): a short elongated dot on a single row, or a
+      // bar spanning the rows when it wraps — both the same width.
       return `<div class="row${cls}" style="height:${h}px" data-line="${i + 1}"><span class="lnum">L${i + 1}</span></div>`;
     })
     .join('');
   bindLineGutterTooltips();
 
-  // Build the inline result overlay: a green "= answer" pinned to the right edge
-  // of each math line (errors render after the "="). Rows are transparent and
-  // click-through; only the chip itself is interactive (hover to copy).
-  resultOverlay.innerHTML = heights
-    .map((h, i) => {
-      const r = lastResults[i];
-      const blank = `<div class="row" style="height:${h}px"></div>`;
-      if (!r || lineModeAt(i) !== 'math') return blank;
-      const activeCls = i === caretLine ? ' active' : '';   // caret on this math line → highlight its answer
-      if (r.error) {
-        let label = 'error';
-        let errCls = 'err-calm';
-        let tip = r.errorTooltip ?? r.error ?? 'Error';
-        if (r.errorKind === 'incomplete') { label = 'N/A'; errCls = 'err-faint'; tip = r.errorTooltip ?? 'Incomplete expression — keep typing.'; }
-        else if (r.errorKind === 'reserved-excel') { label = 'Excel Formula'; tip = r.errorTooltip ?? EXCEL_FORMULA_TOOLTIP; }
-        else if (r.errorKind === 'duplicate-var') { label = 'Duplicate'; tip = r.errorTooltip ?? DUPLICATE_VAR_TOOLTIP; }
-        else if (r.errorKind === 'reserved-name') { label = 'Reserved'; tip = r.errorTooltip ?? RESERVED_NAME_TOOLTIP; }
-        else if (r.errorKind === 'reserved-x') { tip = r.errorTooltip ?? X_RESERVED_TOOLTIP; }
-        else if (r.errorKind === 'unquoted-string') { tip = r.errorTooltip ?? UNQUOTED_STRING_TOOLTIP; }
-        return `<div class="row" style="height:${h}px"><span class="res ${errCls}${activeCls}" data-tooltip="${escapeAttr(tip)}"><span class="eq">=</span> ${escapeHtml(label)}</span></div>`;
-      }
-      const txt = r.display ?? '';
-      if (txt === '') return blank;
-      const copyable = r.numeric !== undefined || r.stringValue !== undefined;
-      const iconHtml = copyable ? COPY_ICON_HTML : '';
-      const staleCls = r.stale ? ' stale' : '';
-      return `<div class="row" style="height:${h}px"><span class="res${staleCls}${activeCls}"><span class="eq">=</span> ${escapeHtml(txt)}${iconHtml}</span></div>`;
-    })
-    .join('');
+  // Final result rows with correct heights, then give every chip the column's
+  // min-width so the "=" signs line up vertically. No max-width: a long answer
+  // shows in full (and its copy icon stays visible) instead of being clipped.
+  resultOverlay.innerHTML = resultRowsHTML(heights, caretLine);
   resultGutter.innerHTML = '';   // results live inline now; the column stays hidden
-  // Align all "=" vertically: make every chip as wide as the widest one. Chips
-  // right-align with left-aligned content, so the "=" signs line up in a column
-  // that shifts left together as the longest result grows.
-  const chips = resultOverlay.querySelectorAll<HTMLElement>('.res');
-  chips.forEach(c => { c.style.minWidth = ''; });
-  let maxChipW = 0;
-  chips.forEach(c => { if (c.offsetWidth > maxChipW) maxChipW = c.offsetWidth; });
-  if (maxChipW > 0) chips.forEach(c => { c.style.minWidth = `${maxChipW}px`; });
+  if (columnW > 0) {
+    resultOverlay.querySelectorAll<HTMLElement>('.res').forEach(c => {
+      c.style.minWidth = `${columnW}px`;
+    });
+  }
   // Re-bind tooltip and click handlers (the chips just got recreated).
   bindResultTooltips();
   bindResultClicks();
@@ -2406,24 +2663,26 @@ function positionMenu() {
 // Pixel coordinates of `pos` within the editor, relative to the editor's
 // own client box (so top/left are usable directly in styles after offsets).
 function caretCoords(pos: number): { top: number; left: number } {
-  const text = editor.value;
-  const before = text.slice(0, pos);
-  // Build measure content: text + a marker span at the caret.
-  measure.style.display = 'block';
-  measure.style.visibility = 'hidden';
-  measure.textContent = '';
-  const pre = document.createTextNode(before);
-  const marker = document.createElement('span');
-  marker.textContent = '​';
-  measure.appendChild(pre);
-  measure.appendChild(marker);
-  const mRect = marker.getBoundingClientRect();
+  // The editor is a contenteditable, so we can measure the caret directly: put a
+  // collapsed range at `pos` and read its client rect (already accounts for
+  // wrapping and scroll). Empty lines have no text rect, so fall back to the
+  // line block's own rect.
+  const p = edOffsetToPoint(pos);
+  const range = document.createRange();
+  range.setStart(p.node, p.offset);
+  range.collapse(true);
+  let rect = range.getBoundingClientRect();
+  if (!rect || (rect.top === 0 && rect.left === 0 && rect.height === 0)) {
+    const el = p.node.nodeType === Node.TEXT_NODE ? (p.node.parentElement as HTMLElement) : (p.node as HTMLElement);
+    if (el && el.getBoundingClientRect) rect = el.getBoundingClientRect();
+  }
   const eRect = editor.getBoundingClientRect();
-  const top = mRect.top - eRect.top;
-  const left = mRect.left - eRect.left;
-  measure.textContent = '';
-  measure.style.display = '';
-  return { top, left };
+  // Return content-relative coords (add scroll back in) to match what callers
+  // like ensureCaretLineVisible expect (they compare against editor.scrollTop).
+  return {
+    top: rect.top - eRect.top + editor.scrollTop,
+    left: rect.left - eRect.left + editor.scrollLeft,
+  };
 }
 
 function handleMenuKey(e: KeyboardEvent): boolean {
@@ -2715,7 +2974,8 @@ function buildFindLayerHtml(text: string, matches: FindMatch[], current: number)
   const out: string[] = [];
   let offset = 0;
   let mi = 0;
-  for (const line of lines) {
+  for (let li = 0; li < lines.length; li++) {
+    const line = lines[li];
     const lineEnd = offset + line.length;
     let html = '';
     let cursor = offset;
@@ -2728,7 +2988,9 @@ function buildFindLayerHtml(text: string, matches: FindMatch[], current: number)
       mi++;
     }
     html += escapeHtml(text.slice(cursor, lineEnd));
-    out.push(`<div class="ov-line">${html || '&#8203;'}</div>`);
+    // Match the editor's per-line wrap so the highlight boxes stay aligned.
+    const cls = lineModeAt(li) === 'math' ? 'ov-line ov-math' : 'ov-line';
+    out.push(`<div class="${cls}">${html || '&#8203;'}</div>`);
     offset = lineEnd + 1;
   }
   return out.join('');
@@ -2911,6 +3173,7 @@ function showTooltipFor(row: HTMLElement) {
   if (!text) return;
   if (tooltipShowTimer) window.clearTimeout(tooltipShowTimer);
   tooltipShowTimer = window.setTimeout(() => {
+    if (!row.isConnected) return;   // row was rebuilt before the delay elapsed
     hoverTooltip.textContent = text;
     hoverTooltip.hidden = false;
     positionTooltipAt(row);
@@ -2921,6 +3184,7 @@ function showTooltipFor(row: HTMLElement) {
 function showTooltipHTML(anchor: HTMLElement, html: string, delay = 250) {
   if (tooltipShowTimer) window.clearTimeout(tooltipShowTimer);
   tooltipShowTimer = window.setTimeout(() => {
+    if (!anchor.isConnected) return;   // anchor row was rebuilt before the delay elapsed
     hoverTooltip.innerHTML = html;
     hoverTooltip.hidden = false;
     positionTooltipAt(anchor);
@@ -3224,6 +3488,7 @@ function updateActiveToken() {
 
 document.addEventListener('selectionchange', () => {
   if (document.activeElement === editor) {
+    edRefreshSelectionCache();
     updateSignatureTooltip();
     // Refresh footer so sum/avg appears as soon as a multi-row selection is
     // made (and disappears when the selection collapses again).
@@ -3265,8 +3530,23 @@ editor.addEventListener('keydown', (e) => {
   }
 });
 
-// Paste / cut should also be captured.
-editor.addEventListener('paste', () => commitTypingBurst());
+// Paste: insert plain text ourselves (contenteditable would otherwise inject
+// HTML), at the current selection, as a single undo step.
+editor.addEventListener('paste', (e) => {
+  e.preventDefault();
+  if (edComposing) return;
+  const t = (e.clipboardData?.getData('text/plain') ?? '').replace(/\r\n?/g, '\n');
+  const s = Math.min(edCaretStart, edCaretEnd);
+  const en = Math.max(edCaretStart, edCaretEnd);
+  captureForUndo();
+  buildEditorDOM(edValue.slice(0, s) + t + edValue.slice(en));
+  edSetSelection(s + t.length, s + t.length);
+  previousText = edValue;
+  scheduleSave();
+  render();
+  ensureCaretLineVisible();
+});
+// Cut is native (removes the selection); the input handler normalizes the DOM.
 editor.addEventListener('cut', () => commitTypingBurst());
 
 init();

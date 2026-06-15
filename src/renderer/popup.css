@@ -11,6 +11,7 @@
   --accent-soft: rgba(37, 99, 235, 0.15);
   --operator: #6b7280;     /* operators / grey */
   --result: #16a34a;       /* answer / green */
+  --op-green: #166534;     /* operators (+ - * / ^ =) / dark green */
   --error: #dc2626;
   --error-soft: #fee2e2;
   --header: #111827;
@@ -27,7 +28,7 @@
   --font-ui: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
   --line-height: 22px;
   --editor-padding: 10px;
-  --result-reserve: 96px;   /* right-edge space reserved for inline results, so long math lines wrap before them */
+  --editor-reserve: 12px;   /* right padding of the editor; layoutGutters() widens it to the answer-column width ONLY when a math formula would otherwise collide with its answer (otherwise text + math both keep full width) */
   --editor-font-size: 14px;
 }
 
@@ -45,6 +46,7 @@
   --accent-soft: rgba(96, 165, 250, 0.22);
   --operator: #9aa3b2;
   --result: #4ade80;
+  --op-green: #4ade80;
   --error: #f87171;
   --error-soft: rgba(248, 113, 113, 0.18);
   --header: #f3f4f6;
@@ -72,6 +74,7 @@
     --accent-soft: rgba(96, 165, 250, 0.22);
     --operator: #9aa3b2;
     --result: #4ade80;
+  --op-green: #4ade80;
     --error: #f87171;
     --error-soft: rgba(248, 113, 113, 0.18);
     --header: #f3f4f6;
@@ -587,6 +590,7 @@ body {
   align-items: flex-start;
   justify-content: flex-end;
   white-space: nowrap;
+  position: relative;         /* for the wrapped-line marker (::before) */
 }
 /* The number sits in an inline pill so hover/active/ref highlights hug it
    instead of filling (and clipping at) the full gutter width. */
@@ -595,6 +599,22 @@ body {
   padding: 0 5px;
   border-radius: 5px;
   transition: background 90ms ease, color 90ms ease;
+}
+/* Every line gets a faint pill marker just to the RIGHT of its number. It's
+   inset 35% of a line-height from the top (and a touch more from the bottom), so
+   a single-row line shows a short "elongated dot", while a wrapped line's marker
+   stretches into a bar spanning its rows — so wrapping reads as one long line.
+   The pill radius gives the soft rounded ends. */
+.line-gutter .row::before {
+  content: "";
+  position: absolute;
+  right: -4px;                 /* just right of the (right-aligned) number, clear of its pill */
+  top: calc(var(--line-height) * 0.35);
+  bottom: calc(var(--line-height) * 0.35 - 2px);   /* a touch longer at the bottom */
+  width: 1.5px;                /* same width for the short dots and the longer wrapped bars */
+  border-radius: 1px;
+  background: var(--text-faint);
+  opacity: 0.4;
 }
 
 /* Each line number is a button: click it to insert that line's L-ref at the
@@ -692,8 +712,9 @@ body {
   font-family: var(--font-mono);
   font-size: var(--editor-font-size);
   line-height: var(--line-height);
-  /* Right padding stays 12px (NOT the reserve) so chips sit at the far right,
-     inside the space the editor reserved — the formula wraps before them. */
+  /* Chips sit 12px from the right edge and paint over the editor (z-index 3)
+     with an opaque backdrop, so on a long math line the formula's end tucks
+     neatly under the "= answer" rather than colliding with it. */
   padding: var(--editor-padding) 12px;
 }
 .result-overlay .row {
@@ -703,7 +724,12 @@ body {
 }
 .result-overlay .res {
   pointer-events: auto;        /* ...except the chip itself, which is hoverable/clickable */
-  max-width: calc(var(--result-reserve) - 12px);
+  /* Opaque backdrop (matches the editor bg, so it's invisible over empty space
+     but cleanly hides a long formula's tail that runs under the result). When
+     the caret is in this math line the active/hover rule below swaps in a
+     translucent green so the formula shows through for editing. */
+  background: var(--bg-elev);
+  max-width: none;             /* layoutGutters() sets an explicit min/max-width so every "=" lines up in a column */
   padding: 0 1px 0 6px;
   border-radius: 4px;
   white-space: nowrap;
@@ -767,9 +793,11 @@ body {
   font-family: var(--font-mono);
   font-size: var(--editor-font-size);
   line-height: var(--line-height);
-  /* Reserve space on the right for the inline results so long math lines wrap
-     before them instead of running underneath. */
-  padding: var(--editor-padding) var(--result-reserve) var(--editor-padding) 12px;
+  /* Top/bottom/left padding live on the container; the RIGHT padding lives on
+     each line block (.ed-line / .ov-line) so lines can wrap at different widths:
+     math lines reserve the answer column (--editor-reserve) while text lines use
+     the full width. A single textarea can't do that; per-line blocks can. */
+  padding: var(--editor-padding) 0 var(--editor-padding) 12px;
   margin: 0;
   border: 0;
   white-space: pre-wrap;
@@ -789,11 +817,20 @@ body {
   z-index: 1;
 }
 
-.ov-line {
+/* One block per logical line, in BOTH the editor (.ed-line) and the colored
+   overlay / find layers (.ov-line). The right padding is the per-line wrap
+   width: text lines keep (nearly) the full width; math lines reserve the answer
+   column so the formula wraps before the "= answer". */
+.ed-line, .ov-line {
   display: block;
   white-space: pre-wrap;
   word-break: break-word;
   overflow-wrap: break-word;
+  padding-right: 12px;
+  min-height: var(--line-height);
+}
+.ed-line.ed-math, .ov-line.ov-math {
+  padding-right: var(--editor-reserve);
 }
 
 .editor {
@@ -801,14 +838,19 @@ body {
   inset: 0;
   width: 100%;
   height: 100%;
-  resize: none;
+  overflow-y: auto;
+  overflow-x: hidden;
   background: transparent;
-  color: transparent;
+  color: transparent;          /* the colored overlay shows the text; this layer holds the caret */
   caret-color: var(--text);
   outline: none;
   z-index: 2;
   user-select: text;
+  cursor: text;
 }
+/* The contenteditable's line blocks inherit the transparent color; the caret
+   and (translucent) selection are what's visible here. */
+.editor .ed-line { color: transparent; }
 
 .measure {
   position: absolute;
@@ -942,7 +984,7 @@ body {
 
 /* ---------- syntax tokens ---------- */
 .tk-num { color: var(--text); }
-.tk-op  { color: var(--operator); }
+.tk-op  { color: var(--op-green); }
 .tk-var { color: var(--accent); font-weight: 500; }
 .tk-fn  { color: #7c3aed; }
 .tk-pct { color: var(--operator); }
