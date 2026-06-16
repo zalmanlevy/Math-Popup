@@ -46,6 +46,12 @@ let edValue = '';
 let edCaretStart = 0;
 let edCaretEnd = 0;
 let edComposing = false;
+// Scroll position captured just BEFORE the browser applies a native edit. The
+// browser auto-scrolls a focused contenteditable to keep the caret visible on
+// every edit (notably Backspace near the bottom), which reads as a jump. We
+// restore this in onEditorInput and let ensureCaretLineVisible make the only
+// deliberate scroll adjustment.
+let scrollBeforeInput = 0;
 
 function edFirstTextNode(el: HTMLElement): Text | null {
   for (const c of Array.from(el.childNodes)) if (c.nodeType === Node.TEXT_NODE) return c as Text;
@@ -193,6 +199,11 @@ function onEditorInput() {
   syncLineModes();              // align lineModes to the new text before rebuilding
   buildEditorDOM(read.text);    // normalize to clean blocks (+ math classes)
   edSetSelection(read.caret, read.caret);
+  // Undo the browser's native edit-scroll: snap back to the pre-edit position so
+  // a plain edit (e.g. Backspace) doesn't shift the view. ensureCaretLineVisible
+  // (run inside onInput) is then the sole authority on scrolling — it nudges only
+  // when the caret line genuinely falls outside the viewport.
+  editor.scrollTop = scrollBeforeInput;
   onInput();                    // existing pipeline: refs, undo, render(), menus
 }
 
@@ -367,6 +378,10 @@ function applyTheme(theme: ThemePref) {
 
 function bindEvents() {
   editor.addEventListener('input', onEditorInput);
+  // Capture the scroll position before the browser mutates the DOM (and before
+  // its native "keep caret visible" scroll), so onEditorInput can neutralize that
+  // jump. Fires for typing, deletion, and paste alike.
+  editor.addEventListener('beforeinput', () => { scrollBeforeInput = editor.scrollTop; });
   // IME: don't normalize the DOM mid-composition (it would cancel the IME);
   // process once on compositionend.
   editor.addEventListener('compositionstart', () => { edComposing = true; });
@@ -381,6 +396,13 @@ function bindEvents() {
     hideSignatureTooltip();
   });
   editor.addEventListener('click', () => { edRefreshSelectionCache(); updateMenuFromCaret(true); updateActiveToken(); });
+  // Right-click in the editor: switch the selected line(s) — or the caret line —
+  // between math and text. (Electron shows no native editor menu, so nothing is
+  // lost by handling this.)
+  editor.addEventListener('contextmenu', (e) => {
+    e.preventDefault();
+    showLineModeMenu(e.clientX, e.clientY);
+  });
   // Re-render when the caret moves to a different line, so the per-line ref
   // display (raw "" L# "" vs the live result), the active-answer highlight, and
   // the current-line number highlight all stay correct. Refresh the cached
@@ -388,7 +410,7 @@ function bindEvents() {
   document.addEventListener('selectionchange', () => {
     if (document.activeElement !== editor) return;
     edRefreshSelectionCache();
-    if (caretLineIndex() !== lastCaretLine) render();
+    if (caretLineIndex() !== lastCaretLine) refreshCaretLineDisplay();
   });
   // Line-number gutter: click a number to drop its L-ref at the caret. Using
   // mousedown + preventDefault keeps the textarea focused and its caret intact
@@ -562,6 +584,24 @@ function caretLineIndex(): number {
   for (let i = 0; i < upto.length; i++) if (upto[i] === '\n') n++;
   return n;
 }
+// Inclusive 0-based line range the current selection touches. A collapsed caret
+// yields a single line. A selection that ends exactly at a line start (just past a
+// newline) doesn't count that trailing line, so selecting "line\n" affects only
+// that line.
+function selectedLineRange(): { start: number; end: number } {
+  const text = editor.value;
+  const selStart = editor.selectionStart;
+  const selEnd = editor.selectionEnd;
+  const lineOf = (off: number) => {
+    let n = 0;
+    for (let i = 0; i < off && i < text.length; i++) if (text[i] === '\n') n++;
+    return n;
+  };
+  let start = lineOf(selStart);
+  let end = lineOf(selEnd);
+  if (selEnd > selStart && selEnd > 0 && text[selEnd - 1] === '\n') end = Math.max(start, end - 1);
+  return { start: Math.min(start, end), end: Math.max(start, end) };
+}
 function countLines(t: string): number {
   let n = 1;
   for (let i = 0; i < t.length; i++) if (t[i] === '\n') n++;
@@ -650,6 +690,20 @@ function toggleLineMode(i: number) {
   render();
   editor.focus();
 }
+// Force an inclusive range of lines to a specific mode (the right-click menu),
+// persist, rerender. Used for both a single line and a multi-line selection.
+function setLinesMode(startLine: number, endLine: number, mode: Mode) {
+  if (startLine < 0) return;
+  padLineModes(editor.value);
+  for (let i = startLine; i <= endLine && i < lineModes.length; i++) {
+    lineModes[i] = mode;
+  }
+  const activePage = pages.find(p => p.id === activePageId);
+  if (activePage) activePage.lineModes = [...lineModes];
+  window.mathPopup.setSettings({ pages, activePageId, closedPages });
+  render();
+  editor.focus();
+}
 
 function applyUpdateIndicator(state: { phase: string }) {
   const showDot =
@@ -717,21 +771,25 @@ function maybeShiftLineRefs() {
   editor.selectionEnd = rewritten.caretEnd;
 }
 
-// Synchronously apply edits made to the active token to all of its other occurrences.
-function maybeSyncRename(previousToken: ActiveToken | null) {
-  if (!previousToken || previousToken.type !== 'var') return;
-
+// Mirror an edit made to a variable's DEFINITION across every reference to it.
+// The rule (and the user-facing contract): renaming the name on its definition
+// line (`shares = …`) renames every use; editing a single reference is left local
+// (only that one spot changes — that's how you point a spot at something else, or
+// introduce a new name). Derived purely from the text diff, so it fires whether
+// the caret reached the name by click, keyboard, or selection — no prior "active
+// token" needed.
+function maybeSyncRename(_previousToken: ActiveToken | null) {
   const oldText = previousText;
   const newText = editor.value;
   if (oldText === newText) return;
 
-  // 1. Find the single contiguous edit.
+  // 1. Locate the single contiguous edit (common prefix/suffix).
   let prefix = 0;
   while (prefix < oldText.length && prefix < newText.length && oldText[prefix] === newText[prefix]) {
     prefix++;
   }
   let suffix = 0;
-  while (suffix < oldText.length - prefix && suffix < newText.length - prefix && 
+  while (suffix < oldText.length - prefix && suffix < newText.length - prefix &&
          oldText[oldText.length - 1 - suffix] === newText[newText.length - 1 - suffix]) {
     suffix++;
   }
@@ -739,41 +797,48 @@ function maybeSyncRename(previousToken: ActiveToken | null) {
   const editStart = prefix;
   const oldEditEnd = oldText.length - suffix;
   const newEditEnd = newText.length - suffix;
-  
   const deletedText = oldText.slice(editStart, oldEditEnd);
   const insertedText = newText.slice(editStart, newEditEnd);
 
-  // 2. Find all occurrences of the variable in the old text.
-  const occurrences: {start: number, end: number}[] = [];
-  const escapedName = previousToken.name.replace(/[.*+?^${}()|[\\]\\\\]/g, '\\$&');
-  const re = new RegExp(`(^|[^A-Za-z0-9_])${escapedName}(?![A-Za-z0-9_])`, 'gi');
-  let m;
+  // 2. The edit must stay inside a single identifier (only word chars touched), so
+  //    it reads as renaming a name — not restructuring the line.
+  if (/[^A-Za-z0-9_]/.test(deletedText) || /[^A-Za-z0-9_]/.test(insertedText)) return;
+  const isWord = (c: string) => /[A-Za-z0-9_]/.test(c);
+  let wStart = editStart;
+  while (wStart > 0 && isWord(oldText[wStart - 1])) wStart--;
+  let wEnd = oldEditEnd;
+  while (wEnd < oldText.length && isWord(oldText[wEnd])) wEnd++;
+  if (wStart === wEnd) return;                       // edit didn't land on an identifier
+
+  const oldName = oldText.slice(wStart, wEnd);
+  const newName = oldText.slice(wStart, editStart) + insertedText + oldText.slice(oldEditEnd, wEnd);
+  // Both the old and new word must be real identifiers (not a number; not emptied).
+  if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(oldName)) return;
+  if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(newName)) return;
+  const oldNameLow = oldName.toLowerCase();
+
+  // 3. Only mirror when the edited name is the variable DEFINED on this line (its
+  //    assignment target, i.e. nothing precedes it on the line). A reference — or
+  //    a same-line reuse like the 2nd `x` in `x = x + 1` — stays local.
+  const lineIndex = (oldText.slice(0, wStart).match(/\n/g) || []).length;
+  const lineResult = lastResults[lineIndex];
+  if (!lineResult || !lineResult.varName || lineResult.varName.toLowerCase() !== oldNameLow) return;
+  const lineStart = oldText.lastIndexOf('\n', wStart - 1) + 1;
+  if (oldText.slice(lineStart, wStart).trim() !== '') return;   // not the LHS → it's a reference
+
+  // 4. All whole-word occurrences of the old name.
+  const occurrences: { start: number; end: number }[] = [];
+  const re = new RegExp(`(^|[^A-Za-z0-9_])${oldName}(?![A-Za-z0-9_])`, 'gi');
+  let m: RegExpExecArray | null;
   while ((m = re.exec(oldText)) !== null) {
     const matchStart = m.index + m[1].length;
-    occurrences.push({ start: matchStart, end: matchStart + previousToken.name.length });
+    occurrences.push({ start: matchStart, end: matchStart + oldName.length });
   }
+  if (occurrences.length <= 1) return;               // nothing else references it
 
-  if (occurrences.length <= 1) return;
-
-  // 3. Ensure the edit is fully contained within exactly one occurrence.
-  const editedOccIdx = occurrences.findIndex(occ => occ.start <= editStart && oldEditEnd <= occ.end);
+  const editedOccIdx = occurrences.findIndex(occ => occ.start === wStart);
   if (editedOccIdx === -1) return;
-
   const editedOcc = occurrences[editedOccIdx];
-
-  // 4. Ensure we are editing the "base" definition, not a reference.
-  const lineIndex = (oldText.slice(0, editedOcc.start).match(/\n/g) || []).length;
-  const lineResult = lastResults[lineIndex];
-  if (!lineResult || !lineResult.varName || lineResult.varName.toLowerCase() !== previousToken.name.toLowerCase()) {
-    return; // The line doesn't define this variable.
-  }
-
-  const lineStart = oldText.lastIndexOf('\n', editedOcc.start - 1) + 1;
-  const textBeforeOccOnLine = oldText.slice(lineStart, editedOcc.start);
-  const isFirstOnLine = !new RegExp(`(^|[^A-Za-z0-9_])${previousToken.name.replace(/[.*+?^${}()|[\\]\\\\]/g, '\\\\$&')}(?![A-Za-z0-9_])`, 'i').test(textBeforeOccOnLine);
-  if (!isFirstOnLine) {
-    return; // We are editing a reference that happens to be on the same line as the definition.
-  }
 
   const relStart = editStart - editedOcc.start;
   const relEnd = oldEditEnd - editedOcc.start;
@@ -783,23 +848,20 @@ function maybeSyncRename(previousToken: ActiveToken | null) {
   let newCaretStart = editor.selectionStart;
   let newCaretEnd = editor.selectionEnd;
 
-  // Apply the exact same edit to all occurrences, from right to left to preserve offsets.
+  // Apply the exact same edit to every occurrence, right-to-left to keep offsets
+  // valid. Skip OTHER lines that DEFINE the same name (another LHS) so two
+  // separate variables never get merged — the duplicate-name error still flags it.
   for (let i = occurrences.length - 1; i >= 0; i--) {
     const occ = occurrences[i];
 
-    // Do not mirror edits to OTHER base variable definitions.
     if (i !== editedOccIdx) {
       const occLineIndex = (oldText.slice(0, occ.start).match(/\n/g) || []).length;
       const occLineResult = lastResults[occLineIndex];
-      const isBaseLine = occLineResult && occLineResult.varName && occLineResult.varName.toLowerCase() === previousToken.name.toLowerCase();
-      
-      if (isBaseLine) {
+      const occIsBase = occLineResult && occLineResult.varName
+        && occLineResult.varName.toLowerCase() === oldNameLow;
+      if (occIsBase) {
         const occLineStart = oldText.lastIndexOf('\n', occ.start - 1) + 1;
-        const occTextBefore = oldText.slice(occLineStart, occ.start);
-        const occIsFirst = !new RegExp(`(^|[^A-Za-z0-9_])${escapedName}(?![A-Za-z0-9_])`, 'i').test(occTextBefore);
-        if (occIsFirst) {
-          continue; // Skip applying edit to this other base definition
-        }
+        if (oldText.slice(occLineStart, occ.start).trim() === '') continue;  // another definition — leave it
       }
     }
 
@@ -817,15 +879,8 @@ function maybeSyncRename(previousToken: ActiveToken | null) {
   editor.value = outText;
   editor.selectionStart = newCaretStart;
   editor.selectionEnd = newCaretEnd;
-
-  // Keep the token active if it still looks like a valid variable,
-  // so the user can continue typing continuously.
-  const newName = oldText.slice(editedOcc.start, editedOcc.start + relStart) + insertedText + oldText.slice(editedOcc.start + relEnd, editedOcc.end);
-  if (/^[A-Za-z_][A-Za-z0-9_]*$/.test(newName)) {
-    activeToken = { type: 'var', name: newName.toLowerCase() };
-  } else {
-    activeToken = null;
-  }
+  // Keep the renamed token active so its uses stay highlighted as one group.
+  activeToken = { type: 'var', name: newName.toLowerCase() };
 }
 
 interface LineShift {
@@ -1463,16 +1518,49 @@ function showTabContextMenu(pageId: string | null, x: number, y: number) {
   }
   addItem('Reorder tabs', '', false, () => enterReorderMode());
 
-  contextMenu.hidden = false;
-  // Clamp the menu inside the window.
-  const mw = contextMenu.offsetWidth;
-  const mh = contextMenu.offsetHeight;
-  const left = Math.max(8, Math.min(x, window.innerWidth - mw - 8));
-  const top = Math.max(8, Math.min(y, window.innerHeight - mh - 8));
-  contextMenu.style.left = `${left}px`;
-  contextMenu.style.top = `${top}px`;
+  placeContextMenuAt(x, y);
 }
 function hideTabContextMenu() { contextMenu.hidden = true; }
+
+// Show the menu (already populated) clamped inside the window.
+function placeContextMenuAt(x: number, y: number) {
+  contextMenu.hidden = false;
+  const mw = contextMenu.offsetWidth;
+  const mh = contextMenu.offsetHeight;
+  contextMenu.style.left = `${Math.max(8, Math.min(x, window.innerWidth - mw - 8))}px`;
+  contextMenu.style.top = `${Math.max(8, Math.min(y, window.innerHeight - mh - 8))}px`;
+}
+
+// Right-click menu inside the editor: switch the selected line(s) — or the caret
+// line if nothing is selected — to math or text. Reuses the shared context-menu
+// element, so the existing outside-click / Escape / blur dismissal covers it.
+function showLineModeMenu(x: number, y: number) {
+  edRefreshSelectionCache();                 // make sure the range reflects the live selection
+  const { start, end } = selectedLineRange();
+  const count = end - start + 1;
+  // Offer the single opposite action: if every selected line is already math,
+  // switch to text; otherwise switch to math (which also unifies a mixed
+  // selection toward math). So you always get the "other" mode in one click.
+  let allMath = true;
+  for (let i = start; i <= end; i++) { if (lineModeAt(i) !== 'math') { allMath = false; break; } }
+  const target: Mode = allMath ? 'text' : 'math';
+
+  contextMenu.innerHTML = '';
+  const item = document.createElement('div');
+  item.className = 'ctx-item';
+  const text = document.createElement('span');
+  text.textContent = count > 1 ? `Switch ${count} lines to ` : 'Switch to ';
+  // Color the mode word the same as everywhere else (green = math, blue = text)
+  // so it's obvious which way you're switching.
+  const mode = document.createElement('span');
+  mode.className = `ctx-mode ctx-mode-${target}`;
+  mode.textContent = target === 'math' ? 'Math' : 'Text';
+  text.appendChild(mode);
+  item.appendChild(text);
+  item.onclick = () => { hideTabContextMenu(); setLinesMode(start, end, target); };
+  contextMenu.appendChild(item);
+  placeContextMenuAt(x, y);
+}
 
 function renderArchiveMenu() {
   archivePopup.innerHTML = '';
@@ -2133,6 +2221,7 @@ function resultRowsHTML(heights: number[], caretLine: number): string {
         else if (r.errorKind === 'reserved-name') { label = 'Reserved'; tip = r.errorTooltip ?? RESERVED_NAME_TOOLTIP; }
         else if (r.errorKind === 'reserved-x') { tip = r.errorTooltip ?? X_RESERVED_TOOLTIP; }
         else if (r.errorKind === 'unquoted-string') { tip = r.errorTooltip ?? UNQUOTED_STRING_TOOLTIP; }
+        else if (r.errorKind === 'unknown-var') { label = 'N/A'; errCls = 'err-faint'; tip = r.errorTooltip ?? 'No variable matches that name.'; }
         return `<div class="row" style="height:${h}px"><span class="res ${errCls}${activeCls}" data-tooltip="${escapeAttr(tip)}"><span class="eq">=</span> ${escapeHtml(label)}</span></div>`;
       }
       const txt = r.display ?? '';
@@ -2237,6 +2326,51 @@ function layoutGutters() {
   // Re-bind tooltip and click handlers (the chips just got recreated).
   bindResultTooltips();
   bindResultClicks();
+}
+
+// Move the caret-line highlight (the result chip `.active` and the gutter
+// `.current`) by toggling classes on the EXISTING rows — no rebuild. A caret move
+// can't change any answer, so there's no reason to recompute the reserve, re-read
+// heights, or recreate the chips; doing that on every click made the whole answer
+// column flicker and shift.
+function applyCaretHighlight(caretLine: number) {
+  resultOverlay.querySelectorAll<HTMLElement>('.res.active').forEach(c => c.classList.remove('active'));
+  for (const row of Array.from(lineGutter.children)) (row as HTMLElement).classList.remove('current');
+  if (caretLine >= 0) {
+    const resRow = resultOverlay.children[caretLine] as HTMLElement | undefined;
+    resRow?.querySelector('.res')?.classList.add('active');
+    (lineGutter.children[caretLine] as HTMLElement | undefined)?.classList.add('current');
+  }
+}
+
+// Toggle the gutter's "referenced line" marker for the active L<n> token, again
+// without rebuilding the gutter.
+function applyActiveLrefHighlight() {
+  const children = lineGutter.children;
+  for (let i = 0; i < children.length; i++) {
+    const isHl = activeToken?.type === 'lref' && activeToken.line === i + 1;
+    (children[i] as HTMLElement).classList.toggle('hl-lref', isHl);
+  }
+}
+
+// Caret moved to a different line. Refresh only what a caret move can affect: the
+// syntax overlay (active-token highlight, and a text line's inline ""L#"" ref
+// switching between its raw token and the resolved value) and the caret-line
+// highlight. Never re-evaluates. Only a text line that carries an inline ref can
+// change width when the caret enters/leaves it, so that's the one case that needs
+// a real re-layout to keep the result rows aligned.
+function refreshCaretLineDisplay() {
+  const caretLine = document.activeElement === editor ? caretLineIndex() : -1;
+  const prev = lastCaretLine;
+  if (caretLine === prev) return;
+  lastCaretLine = caretLine;
+  overlay.innerHTML = highlightNote(editor.value, lastResults, lineModes, activeToken, caretLine);
+  const lines = editor.value.split('\n');
+  const refGeometryChanged = [prev, caretLine].some(
+    i => i >= 0 && i < lines.length && lineModeAt(i) === 'text' && /""[lL]\d+""/.test(lines[i])
+  );
+  if (refGeometryChanged) layoutGutters();
+  else applyCaretHighlight(caretLine);
 }
 
 function updateStatus() {
@@ -3515,9 +3649,11 @@ function updateActiveToken() {
   const newToken = getTokenAtCaret();
   if (tokenEquals(newToken, activeToken)) return;
   activeToken = newToken;
-  // Lightweight re-render: just overlay + gutters, no re-evaluation needed.
-  overlay.innerHTML = highlightNote(editor.value, lastResults, lineModes, activeToken, document.activeElement === editor ? caretLineIndex() : -1);
-  layoutGutters();
+  // Lightweight re-render: refresh the active-token highlight in the overlay and
+  // the gutter's referenced-line marker. The answer column is unaffected by which
+  // token is active, so it is NOT rebuilt — that avoids the click-time reflow.
+  overlay.innerHTML = highlightNote(editor.value, lastResults, lineModes, activeToken, lastCaretLine);
+  applyActiveLrefHighlight();
 }
 
 document.addEventListener('selectionchange', () => {

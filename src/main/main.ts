@@ -62,8 +62,7 @@ function broadcastTheme() {
 
 function createPopup() {
   if (popupWindow && !popupWindow.isDestroyed()) {
-    popupWindow.show();
-    popupWindow.focus();
+    showPopup();
     return;
   }
 
@@ -103,7 +102,7 @@ function createPopup() {
   popupWindow.loadFile(POPUP_HTML);
 
   popupWindow.once('ready-to-show', () => {
-    popupWindow?.show();
+    showPopup();
   });
 
   const persistBounds = () => {
@@ -120,13 +119,47 @@ function createPopup() {
   });
 }
 
+// If the saved position lands off every connected display — e.g. a secondary
+// monitor (the bounds can be negative) was unplugged or went to sleep — the
+// window would open invisibly and look like it "disappeared". Re-center it on the
+// primary display in that case. Called on every show, so a monitor change between
+// summons can't strand it off-screen. No-op while the saved monitor is present.
+function placeOnVisibleScreen(win: BrowserWindow) {
+  const b = win.getBounds();
+  const onScreen = screen.getAllDisplays().some(d => {
+    const a = d.workArea;
+    return b.x < a.x + a.width && b.x + b.width > a.x &&
+           b.y < a.y + a.height && b.y + b.height > a.y;
+  });
+  if (onScreen) return;
+  const wa = screen.getPrimaryDisplay().workArea;
+  const width = Math.min(b.width, wa.width);
+  const height = Math.min(b.height, wa.height);
+  win.setBounds({
+    x: Math.round(wa.x + (wa.width - width) / 2),
+    y: Math.round(wa.y + (wa.height - height) / 2),
+    width,
+    height,
+  });
+}
+
+// Bring the popup on-screen and re-apply the pin before showing. Re-asserting
+// always-on-top on every show guards against Electron dropping the flag across a
+// hide/show cycle on Windows.
+function showPopup() {
+  if (!popupWindow || popupWindow.isDestroyed()) return;
+  placeOnVisibleScreen(popupWindow);
+  popupWindow.setAlwaysOnTop(loadSettings().alwaysOnTop);
+  popupWindow.show();
+  popupWindow.focus();
+}
+
 function togglePopup() {
   if (popupWindow && !popupWindow.isDestroyed()) {
     if (popupWindow.isVisible() && popupWindow.isFocused()) {
       popupWindow.hide();
     } else {
-      popupWindow.show();
-      popupWindow.focus();
+      showPopup();
     }
   } else {
     createPopup();

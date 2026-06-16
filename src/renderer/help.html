@@ -120,10 +120,15 @@
         as <strong>math</strong> and it's evaluated, with its result shown inline.
         A note can mix the two freely — prose and lists stay text while the lines
         you care about compute.</p>
-      <p><strong>Make a line math (or text again)</strong> in either of these ways:</p>
+      <p><strong>Make a line math (or text again)</strong> in any of these ways:</p>
       <ul>
         <li><strong>Double-click its line number</strong> in the left gutter to
           toggle that line between math and text.</li>
+        <li><strong>Right-click in the editor</strong> to switch modes. The menu
+          shows the one option for whichever mode the line <em>isn't</em>
+          (color-coded — green for Math, blue for Text). It applies to the line
+          your cursor is on, or — if you select across several lines first — to
+          every line in the selection at once.</li>
         <li>Type <code>/math</code> or <code>/text</code> on the line and press
           <kbd>Space</kbd> or <kbd>Enter</kbd> — the command word is removed and
           the line switches. (They're also in the slash menu.)</li>
@@ -272,6 +277,15 @@ price * qty</code></pre>
         <code>pi</code>, <code>e</code>, <code>true</code>, and <code>false</code>
         cannot be redefined — trying to assign to one shows
         <strong>Reserved</strong> after the <code>=</code> with a hover tooltip.</p>
+      <p><strong>Renaming.</strong> Edit the name on its <em>definition</em> line
+        (the <code>name = …</code> line) and every reference updates with it
+        automatically. Editing a single <em>reference</em> instead changes only
+        that one spot — that's how you point a single line at a different value or
+        introduce a new name. If a reference no longer matches any variable (you
+        added a letter, say), its result shows <strong>N/A</strong> with a hover
+        note explaining that no variable matches and reminding you to rename from
+        the definition line. Defining the same name twice shows
+        <strong>Duplicate</strong> so the conflict is obvious.</p>
     </section>
 
     <section id="varspopup">
@@ -488,18 +502,24 @@ AVERAGE(L1:L3)    → 20</code></pre>
         tooltip explaining the issue.</p>
       <p>There are just two visual styles:</p>
       <ul>
-        <li><strong>N/A</strong> — a soft grey placeholder for a line that's
-          simply <em>incomplete</em>, i.e. you're still mid-typing (a trailing
-          operator, an unclosed <code>SUM(</code>, etc.). It's not really an
-          error, so it stays quiet.</li>
+        <li><strong>N/A</strong> — a soft grey placeholder for a line that can't
+          produce a value yet. Two causes, each explained on hover:
+          <ul>
+            <li><em>Incomplete</em> — you're still mid-typing (a trailing
+              operator, an unclosed <code>SUM(</code>, etc.). Not really an
+              error, so it stays quiet.</li>
+            <li><em>No matching variable</em> — the line references a name that
+              isn't a defined variable (a typo, or a reference you renamed). The
+              tooltip notes that no variable matches, reminds you that renaming
+              from the <em>definition</em> line updates every use, and — if you
+              meant text — to wrap it in quotes.</li>
+          </ul></li>
         <li>A muted, dotted-underlined marker for a genuine mistake. All of
           these share the same calm color (not an aggressive red):
           <ul>
             <li><strong>error</strong> — the evaluator couldn't resolve the
-              line: an unknown bare word (tooltip <em>"Add Quotations"</em> —
-              wrap text values in quotes; only <code>TRUE</code>/<code>FALSE</code>
-              work bare), assigning to <code>x</code>, or an otherwise invalid
-              expression.</li>
+              line: an otherwise invalid expression, or assigning to
+              <code>x</code> (reserved as multiply).</li>
             <li><strong>Excel Formula</strong> — you assigned to an Excel
               function name (<code>sum = 5</code>). The tooltip lists them.</li>
             <li><strong>Duplicate</strong> — that variable name is already

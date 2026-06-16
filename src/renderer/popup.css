@@ -555,6 +555,10 @@ body {
 }
 .tab-context-menu .ctx-item:hover { background: var(--bg-soft); }
 .tab-context-menu .ctx-item.danger:hover { background: var(--error-soft); color: var(--error); }
+/* Mode word in the line-switch menu, color-coded to match the editor (green =
+   math, blue = text) so the target mode is unmistakable. */
+.tab-context-menu .ctx-mode-math { color: var(--result); font-weight: 700; }
+.tab-context-menu .ctx-mode-text { color: var(--accent); font-weight: 700; }
 .tab-context-menu .ctx-key {
   margin-left: auto;
   padding-left: 16px;
@@ -1267,6 +1271,7 @@ body {
   font-family: var(--font-ui);
   font-size: 11px;
   line-height: 1.45;
+  white-space: pre-line;   /* honor \n in multi-line tips (e.g. the unknown-variable hint) while still wrapping */
   pointer-events: none;
 }
 .hover-tooltip[hidden] { display: none; }

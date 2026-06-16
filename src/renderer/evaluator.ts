@@ -95,7 +95,7 @@ export interface LineResult {
   stringValue?: string; // string result (e.g. IF returning "TRUE"/"FALSE")
   error?: string;      // short error message if eval failed (only set when no
                        //   stale fallback is available)
-  errorKind?: 'reserved-x' | 'reserved-excel' | 'reserved-name' | 'unquoted-string' | 'duplicate-var' | 'incomplete' | 'general';
+  errorKind?: 'reserved-x' | 'reserved-excel' | 'reserved-name' | 'unquoted-string' | 'duplicate-var' | 'incomplete' | 'general' | 'unknown-var';
   errorTooltip?: string;  // longer message shown on hover for special errors
   varName?: string;    // assignment target, if any
   stale?: boolean;     // true when display/numeric is the previous render's
@@ -139,6 +139,21 @@ export const RESERVED_NAME_TOOLTIP =
   'This name is reserved (line refs like L1/L2, constants pi/e, or true/false/null) and cannot be used as a variable.';
 export const DUPLICATE_VAR_TOOLTIP =
   'This variable is already defined on a previous line. Rename one of them to avoid conflicts.';
+
+// Shown when an expression references a name that isn't a known variable — the
+// usual cause is a typo, or editing a single reference (which only changes that
+// spot) when the intent was to rename. Leads with the variable case since this is
+// a calculator, keeps the quotes hint for the IF("YES"/"NO") case, and points at
+// how to rename everywhere. The "*" line is surfaced on its own row in the popup.
+export function undefinedVarTooltip(name: string): string {
+  const q = name ? `"${name}"` : 'that name';
+  return (
+    `No variable named ${q}. Check the spelling, or define it first.\n` +
+    `* To rename a variable everywhere, edit the line where it's first defined — ` +
+    `editing one reference only changes that spot.\n` +
+    `If ${q} is meant as text, wrap it in quotes.`
+  );
+}
 
 interface PreprocessCtx {
   scope: Record<string, number>;
@@ -237,14 +252,16 @@ function evaluateOnePass(
 
     // Sticky last-good-value: while the user is mid-edit, an expression line
     // may temporarily fail to parse. Carry over the previous render's numeric
-    // value (marked as stale) instead of flashing "err" red. Skip for the
-    // special reserved-name errors — those are user-facing intentional errors
-    // and we don't want them to ever look successful.
-    const isReservedErr = r.errorKind === 'reserved-x' || r.errorKind === 'reserved-excel'
+    // value (marked as stale) instead of flashing "err" red. Skip for definite,
+    // user-facing errors — reserved-name conflicts AND referencing a name that
+    // isn't a defined variable. Those aren't transient parse hiccups: masking
+    // them with an old value silently feeds stale data downstream and leaves a
+    // number showing an "unknown variable" tooltip, so show N/A honestly instead.
+    const noStaleFallback = r.errorKind === 'reserved-x' || r.errorKind === 'reserved-excel'
       || r.errorKind === 'reserved-name' || r.errorKind === 'unquoted-string'
-      || r.errorKind === 'duplicate-var';
+      || r.errorKind === 'duplicate-var' || r.errorKind === 'unknown-var';
     const hasResult = r.numeric !== undefined || r.stringValue !== undefined;
-    if (!isReservedErr &&
+    if (!noStaleFallback &&
         (r.kind === 'expression' || r.kind === 'assignment' || r.kind === 'bullet') &&
         (r.error || !hasResult)) {
       const prev = previous[i];
@@ -602,10 +619,13 @@ function computeExpression(
     // hover tooltip that explains the fix. TRUE/FALSE are exempt from this
     // (rewritten to "TRUE"/"FALSE" earlier in this function).
     if (/Undefined symbol/i.test(msg)) {
+      // mathjs has already lowercased identifiers by this point, so the symbol in
+      // the message matches what the user typed (case-insensitively).
+      const sym = msg.match(/Undefined symbol\s+([A-Za-z_][A-Za-z0-9_]*)/i)?.[1] ?? '';
       return {
-        error: 'err',
-        errorKind: 'unquoted-string',
-        errorTooltip: UNQUOTED_STRING_TOOLTIP
+        error: 'N/A',
+        errorKind: 'unknown-var',
+        errorTooltip: undefinedVarTooltip(sym)
       };
     }
     // Incomplete expressions while mid-typing (trailing operator, unclosed
