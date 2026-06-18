@@ -23,6 +23,22 @@ export interface HighlightContext {
   knownVariables: Set<string>; // names defined elsewhere in the note
 }
 
+// Columns to hang-indent a wrapped list line by: the width of its leading
+// marker ("- ", "1. ", "  2) ") so continuation rows line up under the item
+// text, Word/Google-Docs style. Returns 0 when the line isn't a list item.
+// The editor is monospace, so 1 column == 1ch. Mirrors parseListLine() in
+// popup.ts — keep the two regexes in sync. Applied identically to every render
+// layer (.ed-line, .ov-line, find layer) so the caret never drifts from the
+// colored text.
+export function listIndentCols(line: string): number {
+  const m = /^(\s*)(?:([-*+])|(\d+)([.)]))(\s*)(.*)$/.exec(line);
+  if (!m) return 0;
+  const [, indent, bullet, num, delim, spaceAfter, content] = m;
+  const hasContent = content.trim().length > 0;
+  if (spaceAfter.length === 0 && !(num && !hasContent)) return 0;
+  return indent.length + (bullet ? bullet.length : num!.length + delim!.length) + spaceAfter.length;
+}
+
 export function highlightNote(text: string, lineResults: LineResult[], lineModes: Mode[] = [], activeToken?: ActiveToken | null, caretLine = -1): string {
   const lines = text.split('\n');
   const knownVariables = new Set<string>();
@@ -40,7 +56,9 @@ export function highlightNote(text: string, lineResults: LineResult[], lineModes
       // so each line wraps independently: math lines get .ov-math (reserving the
       // answer column via right padding) while text lines use the full width.
       const cls = mode === 'math' ? 'ov-line ov-math' : 'ov-line';
-      return `<div class="${cls}">${tokens || '&#8203;'}</div>`;
+      const indent = listIndentCols(line);
+      const style = indent > 0 ? ` style="padding-left:${indent}ch;text-indent:-${indent}ch"` : '';
+      return `<div class="${cls}"${style}>${tokens || '&#8203;'}</div>`;
     })
     .join('');
 }

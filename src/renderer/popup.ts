@@ -1,5 +1,5 @@
 import { evaluateNote, evaluateSelectedText, LineResult, EXCEL_FORMULA_TOOLTIP, X_RESERVED_TOOLTIP, UNQUOTED_STRING_TOOLTIP, RESERVED_NAME_TOOLTIP, DUPLICATE_VAR_TOOLTIP, isExcelFunctionName } from './evaluator';
-import { highlightNote, ActiveToken } from './highlighter';
+import { highlightNote, listIndentCols, ActiveToken } from './highlighter';
 import { formatWithCommas, formatResult } from './formatter';
 import type { Mode, Page, Settings, Suffix, ThemePref } from '../shared/types';
 import { ZOOM_MIN, ZOOM_MAX, ZOOM_STEP } from '../shared/types';
@@ -75,12 +75,25 @@ function buildEditorDOM(text: string) {
   applyEditorLineModes();
 }
 
-// Toggle the per-line math class on existing .ed-line blocks. Cheap and does not
-// rebuild text, so it never disturbs the caret.
+// Toggle the per-line math class on existing .ed-line blocks, and hang-indent
+// list lines. Cheap and does not rebuild text, so it never disturbs the caret.
 function applyEditorLineModes() {
   const divs = ed.children;
+  const lines = editor.value.split('\n');
   for (let i = 0; i < divs.length; i++) {
-    (divs[i] as HTMLElement).classList.toggle('ed-math', lineModeAt(i) === 'math');
+    const el = divs[i] as HTMLElement;
+    el.classList.toggle('ed-math', lineModeAt(i) === 'math');
+    // Mirror the overlay's hanging indent (see listIndentCols / highlightNote)
+    // so a wrapped bullet/number line's continuation rows sit under the item
+    // text. This MUST match .ov-line exactly or the caret drifts off the text.
+    const cols = listIndentCols(lines[i] ?? '');
+    if (cols > 0) {
+      el.style.paddingLeft = `${cols}ch`;
+      el.style.textIndent = `-${cols}ch`;
+    } else if (el.style.paddingLeft || el.style.textIndent) {
+      el.style.paddingLeft = '';
+      el.style.textIndent = '';
+    }
   }
 }
 
@@ -3149,9 +3162,12 @@ function buildFindLayerHtml(text: string, matches: FindMatch[], current: number)
       mi++;
     }
     html += escapeHtml(text.slice(cursor, lineEnd));
-    // Match the editor's per-line wrap so the highlight boxes stay aligned.
+    // Match the editor's per-line wrap so the highlight boxes stay aligned —
+    // including the list hanging indent (see listIndentCols).
     const cls = lineModeAt(li) === 'math' ? 'ov-line ov-math' : 'ov-line';
-    out.push(`<div class="${cls}">${html || '&#8203;'}</div>`);
+    const indent = listIndentCols(line);
+    const style = indent > 0 ? ` style="padding-left:${indent}ch;text-indent:-${indent}ch"` : '';
+    out.push(`<div class="${cls}"${style}>${html || '&#8203;'}</div>`);
     offset = lineEnd + 1;
   }
   return out.join('');
