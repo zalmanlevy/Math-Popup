@@ -393,12 +393,15 @@ body {
   font-size: 14px;
   line-height: 1;
   flex: 0 0 auto;
-  color: var(--text-faint);
+  /* Pale "disarmed" red on a background tab: visible but not inviting, and a
+     click just selects the tab (see renderTabBar) so you can't close it by
+     mis-clicking while switching. Middle-click closes any tab. */
+  color: color-mix(in srgb, var(--error) 45%, transparent);
   transition: background 100ms ease, color 100ms ease;
 }
-.tab-chip:hover .tab-chip-close { color: var(--text-soft); }
-.tab-chip.active .tab-chip-close { color: var(--accent); }
-.tab-chip-close:hover { background: var(--error-soft); color: var(--error); }
+/* Active tab: the × is "armed" — solid red, a click closes, clear hover target. */
+.tab-chip.active .tab-chip-close { color: var(--error); }
+.tab-chip.active .tab-chip-close:hover { background: var(--error-soft); color: var(--error); }
 
 /* overflow chevron + "+" new-tab button — trail the last tab, always visible */
 .tab-overflow-btn,

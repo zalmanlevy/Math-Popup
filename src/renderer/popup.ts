@@ -1439,15 +1439,26 @@ function renderTabBar() {
     nameSpan.className = 'tab-chip-name';
     nameSpan.textContent = label;
 
-    // close (×) — always visible, like a regular browser tab
+    // close (×) — always visible. On a BACKGROUND tab it's "disarmed" (pale red):
+    // a click just selects the tab, so you can't close one by mis-clicking while
+    // switching. On the ACTIVE tab the × is armed and a click closes it.
     const closeBtn = document.createElement('span');
     closeBtn.className = 'tab-chip-close';
     closeBtn.textContent = '×';
-    closeBtn.title = 'Close tab';
+    closeBtn.title = page.id === activePageId ? 'Close tab' : 'Middle-click to close';
     closeBtn.onclick = (e) => {
+      if (page.id !== activePageId) return;   // background tab: let it bubble → switchTab
       e.stopPropagation();
       closeTab(page.id);
     };
+
+    // Middle-click closes any tab directly (browser-style), armed or not.
+    chip.addEventListener('mousedown', (e) => {
+      if (e.button === 1) e.preventDefault();   // suppress the middle-click autoscroll cursor
+    });
+    chip.addEventListener('auxclick', (e) => {
+      if (e.button === 1) { e.preventDefault(); closeTab(page.id); }
+    });
 
     chip.appendChild(nameSpan);
     chip.appendChild(closeBtn);
@@ -3709,6 +3720,31 @@ editor.addEventListener('keydown', (e) => {
   }
 });
 
+// Copy/cut/paste remember each line's math/text mode, so lifting lines out of one
+// page and dropping them on another (anywhere in the app) keeps each line's type.
+// We stash {exact text, modes} on copy/cut and re-apply on paste when the pasted
+// text matches; pasting unrelated/external text just falls back to normal sync.
+let copiedLineModes: { text: string; modes: Mode[] } | null = null;
+function rememberCopiedModes(text: string, startOffset: number) {
+  const startLine = edValue.slice(0, startOffset).split('\n').length - 1;
+  const count = text.split('\n').length;
+  const modes: Mode[] = [];
+  for (let k = 0; k < count; k++) modes.push(lineModeAt(startLine + k));
+  copiedLineModes = { text, modes };
+}
+
+// Copy: take over so the clipboard text is exactly edValue's slice (so it matches
+// what paste sees), and record the selected lines' modes.
+editor.addEventListener('copy', (e) => {
+  const s = Math.min(edCaretStart, edCaretEnd);
+  const en = Math.max(edCaretStart, edCaretEnd);
+  if (s === en) return;                       // nothing selected — let the browser no-op
+  const text = edValue.slice(s, en);
+  e.preventDefault();
+  e.clipboardData?.setData('text/plain', text);
+  rememberCopiedModes(text, s);
+});
+
 // Paste: insert plain text ourselves (contenteditable would otherwise inject
 // HTML), at the current selection, as a single undo step.
 editor.addEventListener('paste', (e) => {
@@ -3721,11 +3757,42 @@ editor.addEventListener('paste', (e) => {
   buildEditorDOM(edValue.slice(0, s) + t + edValue.slice(en));
   edSetSelection(s + t.length, s + t.length);
   previousText = edValue;
+  // Restore remembered per-line modes when re-pasting in-app content. Anchor the
+  // mode-sync to the new text first (so render()'s syncLineModes won't recompute
+  // the pasted lines), then stamp the saved modes onto the pasted range.
+  if (copiedLineModes && copiedLineModes.text === t && t.length > 0) {
+    syncLineModes();
+    const startLine = edValue.slice(0, s).split('\n').length - 1;
+    for (let k = 0; k < copiedLineModes.modes.length && startLine + k < lineModes.length; k++) {
+      lineModes[startLine + k] = copiedLineModes.modes[k];
+    }
+    const active = pages.find((p) => p.id === activePageId);
+    if (active) active.lineModes = [...lineModes];
+  }
   scheduleSave();
   render();
   ensureCaretLineVisible();
 });
-// Cut is native (removes the selection); the input handler normalizes the DOM.
-editor.addEventListener('cut', () => commitTypingBurst());
+
+// Cut: take over (like paste) so the clipboard text exactly matches edValue and we
+// can record the lifted lines' modes before removing them.
+editor.addEventListener('cut', (e) => {
+  if (edComposing) return;
+  const s = Math.min(edCaretStart, edCaretEnd);
+  const en = Math.max(edCaretStart, edCaretEnd);
+  if (s === en) return;                       // nothing selected — let the browser no-op
+  e.preventDefault();
+  const text = edValue.slice(s, en);
+  e.clipboardData?.setData('text/plain', text);
+  rememberCopiedModes(text, s);
+  commitTypingBurst();
+  captureForUndo();
+  buildEditorDOM(edValue.slice(0, s) + edValue.slice(en));
+  edSetSelection(s, s);
+  previousText = edValue;
+  scheduleSave();
+  render();
+  ensureCaretLineVisible();
+});
 
 init();

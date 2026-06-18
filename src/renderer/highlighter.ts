@@ -23,14 +23,17 @@ export interface HighlightContext {
   knownVariables: Set<string>; // names defined elsewhere in the note
 }
 
-// Columns to hang-indent a wrapped list line by: the width of its leading
-// marker ("- ", "1. ", "  2) ") so continuation rows line up under the item
-// text, Word/Google-Docs style. Returns 0 when the line isn't a list item.
-// The editor is monospace, so 1 column == 1ch. Mirrors parseListLine() in
-// popup.ts — keep the two regexes in sync. Applied identically to every render
-// layer (.ed-line, .ov-line, find layer) so the caret never drifts from the
-// colored text.
+// Columns to hang-indent a wrapped line by: the width of its leading marker
+// ("- ", "1. ", "  2) ", "# ", "## ") so continuation rows line up under the
+// item / heading text, Word/Google-Docs style. Returns 0 when the line has no
+// such marker. The editor is monospace, so 1 column == 1ch. The list arm mirrors
+// parseListLine() in popup.ts and the header arm mirrors tokenizeLine()'s hMatch
+// — keep them in sync. Applied identically to every render layer (.ed-line,
+// .ov-line, find layer) so the caret never drifts from the colored text.
 export function listIndentCols(line: string): number {
+  // Markdown header: "# " … "###### " (must track tokenizeLine's hMatch).
+  const h = /^(\s*)(#{1,6})(\s+)/.exec(line);
+  if (h) return h[1].length + h[2].length + h[3].length;
   const m = /^(\s*)(?:([-*+])|(\d+)([.)]))(\s*)(.*)$/.exec(line);
   if (!m) return 0;
   const [, indent, bullet, num, delim, spaceAfter, content] = m;
