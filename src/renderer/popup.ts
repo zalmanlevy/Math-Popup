@@ -1788,16 +1788,9 @@ function onKeyDown(e: KeyboardEvent) {
     return;
   }
 
-  // Space behaves like smart Tab when the caret is in/after a number: update the
-  // commas and hop to just past the number's SINGLE trailing space — reusing an
-  // existing space instead of doubling it, or adding one if there isn't any. So
-  // editing in the middle of a number and pressing space (or Tab) lands you
-  // after the one space. When the caret isn't in a number, handleSmartTab
-  // returns false and the space types normally (incl. the usual auto-format).
-  if (currentMode() === 'math' && e.key === ' ' &&
-      !e.ctrlKey && !e.shiftKey && !e.altKey && !e.metaKey) {
-    if (handleSmartTab()) { e.preventDefault(); return; }
-  }
+  // Space always inserts a literal space at the caret — even mid-number. Only
+  // Tab (handled above) hops past the number. The auto-format pass below still
+  // runs so the part left of the caret gets re-commaized as usual.
 
   // Auto-format / suffix-expansion triggers: space, operators, Enter, comma
   if (currentMode() === 'math' && shouldAutoFormatOnKey(e)) {
