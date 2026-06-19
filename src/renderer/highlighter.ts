@@ -58,7 +58,11 @@ export function highlightNote(text: string, lineResults: LineResult[], lineModes
       // Each line is its own block so layoutGutters can read per-line heights and
       // so each line wraps independently: math lines get .ov-math (reserving the
       // answer column via right padding) while text lines use the full width.
-      const cls = mode === 'math' ? 'ov-line ov-math' : 'ov-line';
+      let cls = mode === 'math' ? 'ov-line ov-math' : 'ov-line';
+      // Obsidian-style conceal: collapse inline bold/italic/underline markers on
+      // every text line except the one the caret is on (caretLine === -1 when the
+      // editor isn't focused, so everything reads clean).
+      if (mode === 'text' && i !== caretLine) cls += ' ov-conceal';
       const indent = listIndentCols(line);
       const style = indent > 0 ? ` style="padding-left:${indent}ch;text-indent:-${indent}ch"` : '';
       return `<div class="${cls}"${style}>${tokens || '&#8203;'}</div>`;
@@ -231,9 +235,27 @@ function highlightInlineMarkdownPreserveSpans(html: string): string {
 function highlightInlineMarkdown(s: string): string {
   // **bold**
   s = s.replace(/\*\*([^*\n]+)\*\*/g, '<span class="md-marker">**</span><span class="md-bold">$1</span><span class="md-marker">**</span>');
+  // __underline__
+  s = s.replace(/__([^_\n]+)__/g, '<span class="md-marker">__</span><span class="md-underline">$1</span><span class="md-marker">__</span>');
   // *italic* (avoid matching after ** which we already replaced into spans)
   s = s.replace(/(^|[^*<>])\*([^*\n<>]+)\*(?!\*)/g,
     '$1<span class="md-marker">*</span><span class="md-italic">$2</span><span class="md-marker">*</span>');
+  return s;
+}
+
+// Wrap ONLY the inline-markdown markers (** __ *) of a raw line in
+// <span class="ed-mk">, leaving the formatted text as plain escaped text. The
+// editor (transparent edit layer) renders lines through this so those markers can
+// be collapsed (concealed) in lockstep with the overlay's <span class="md-marker">
+// — same patterns/order as highlightInlineMarkdown means identical marker
+// positions, so the two layers stay character-aligned (monospace: bold/italic are
+// the same width as plain). Lines with no markers come back as plain escaped text,
+// i.e. a single text node, exactly as before.
+export function wrapInlineMarkers(line: string): string {
+  let s = escapeHtml(line);
+  s = s.replace(/\*\*([^*\n]+)\*\*/g, '<span class="ed-mk">**</span>$1<span class="ed-mk">**</span>');
+  s = s.replace(/__([^_\n]+)__/g, '<span class="ed-mk">__</span>$1<span class="ed-mk">__</span>');
+  s = s.replace(/(^|[^*<>])\*([^*\n<>]+)\*(?!\*)/g, '$1<span class="ed-mk">*</span>$2<span class="ed-mk">*</span>');
   return s;
 }
 

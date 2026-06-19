@@ -858,6 +858,14 @@ body {
   padding-right: var(--editor-reserve);
 }
 
+/* Obsidian-style conceal: collapse the inline bold/italic/underline markers on
+   every line except the one the caret is on. The editor's transparent .ed-mk and
+   the overlay's colored .md-marker wrap the SAME characters, so hiding both keeps
+   the two layers character-aligned (and only inline markers hide — list bullets
+   .md-bullet and header hashes .md-h-marker are untouched). */
+.ed-line.ed-conceal .ed-mk,
+.ov-line.ov-conceal .md-marker { display: none; }
+
 .editor {
   position: absolute;
   inset: 0;
@@ -1291,6 +1299,7 @@ body {
 .md-bullet { color: var(--bullet); font-weight: 700; }
 .md-bold { font-weight: 700; color: var(--text); }
 .md-italic { font-style: italic; color: var(--text); }
+.md-underline { text-decoration: underline; text-underline-offset: 2px; }
 .md-marker { color: var(--text-faint); }
 
 /* ---------- status bar ---------- */

@@ -1,5 +1,5 @@
 import { evaluateNote, evaluateSelectedText, LineResult, EXCEL_FORMULA_TOOLTIP, X_RESERVED_TOOLTIP, UNQUOTED_STRING_TOOLTIP, RESERVED_NAME_TOOLTIP, DUPLICATE_VAR_TOOLTIP, isExcelFunctionName } from './evaluator';
-import { highlightNote, listIndentCols, ActiveToken } from './highlighter';
+import { highlightNote, listIndentCols, wrapInlineMarkers, ActiveToken } from './highlighter';
 import { formatWithCommas, formatResult } from './formatter';
 import type { Mode, Page, Settings, Suffix, ThemePref } from '../shared/types';
 import { ZOOM_MIN, ZOOM_MAX, ZOOM_STEP } from '../shared/types';
@@ -64,7 +64,7 @@ function buildEditorDOM(text: string) {
   const lines = text.split('\n');
   let html = '';
   for (let i = 0; i < lines.length; i++) {
-    html += `<div class="ed-line">${lines[i].length ? escapeHtml(lines[i]) : '<br>'}</div>`;
+    html += `<div class="ed-line">${lines[i].length ? wrapInlineMarkers(lines[i]) : '<br>'}</div>`;
   }
   // Replacing innerHTML resets the element's scrollTop to 0; preserve it so the
   // view doesn't jump to the top on every keystroke when the note is scrolled.
@@ -75,14 +75,30 @@ function buildEditorDOM(text: string) {
   applyEditorLineModes();
 }
 
-// Toggle the per-line math class on existing .ed-line blocks, and hang-indent
-// list lines. Cheap and does not rebuild text, so it never disturbs the caret.
+// Conceal inline-markdown markers (.ed-mk) on every text line except the one the
+// caret sits on — the editor half of the Obsidian-style reveal. Toggles a class
+// only (no DOM rebuild), so it's safe to call on a bare caret move. Mirrors the
+// overlay's .ov-conceal (see highlightNote) so both layers collapse the same
+// characters and stay aligned.
+function applyEditorConceal(caretLine: number) {
+  const divs = ed.children;
+  for (let i = 0; i < divs.length; i++) {
+    (divs[i] as HTMLElement).classList.toggle('ed-conceal', lineModeAt(i) === 'text' && i !== caretLine);
+  }
+}
+
+// Toggle the per-line math class on existing .ed-line blocks, hang-indent list
+// lines, and conceal inline markers off the caret line. Cheap and does not rebuild
+// text, so it never disturbs the caret.
 function applyEditorLineModes() {
   const divs = ed.children;
   const lines = editor.value.split('\n');
+  const caretLine = document.activeElement === editor ? caretLineIndex() : -1;
   for (let i = 0; i < divs.length; i++) {
     const el = divs[i] as HTMLElement;
-    el.classList.toggle('ed-math', lineModeAt(i) === 'math');
+    const isMath = lineModeAt(i) === 'math';
+    el.classList.toggle('ed-math', isMath);
+    el.classList.toggle('ed-conceal', !isMath && i !== caretLine);
     // Mirror the overlay's hanging indent (see listIndentCols / highlightNote)
     // so a wrapped bullet/number line's continuation rows sit under the item
     // text. This MUST match .ov-line exactly or the caret drifts off the text.
@@ -142,25 +158,33 @@ function readEditorDOM(focusNode: Node | null, focusOffset: number): { text: str
   return { text, caret };
 }
 
+// Map a within-block offset to a DOM point, walking ALL of the block's text nodes
+// in order. A line may now hold several text nodes (the marker spans .ed-mk used
+// for conceal), not just one — so we can't assume a single first text node.
+function edPointInBlock(block: HTMLElement, local: number): { node: Node; offset: number } {
+  const walker = document.createTreeWalker(block, NodeFilter.SHOW_TEXT);
+  let acc = 0;
+  let last: Text | null = null;
+  for (let tn = walker.nextNode() as Text | null; tn; tn = walker.nextNode() as Text | null) {
+    if (local <= acc + tn.length) return { node: tn, offset: local - acc };
+    acc += tn.length;
+    last = tn;
+  }
+  if (last) return { node: last, offset: last.length };
+  return { node: block, offset: 0 };   // empty line (<br> placeholder)
+}
+
 // Map a flat offset to a DOM point inside the CURRENT (clean) editor structure.
 function edOffsetToPoint(offset: number): { node: Node; offset: number } {
   const blocks = Array.from(ed.children) as HTMLElement[];
   let acc = 0;
   for (let i = 0; i < blocks.length; i++) {
-    const tn = edFirstTextNode(blocks[i]);
-    const len = tn ? tn.length : 0;
-    if (offset <= acc + len) {
-      if (tn) return { node: tn, offset: Math.max(0, offset - acc) };
-      return { node: blocks[i], offset: 0 };   // empty line (<br> placeholder)
-    }
+    const len = (blocks[i].textContent ?? '').length;
+    if (offset <= acc + len) return edPointInBlock(blocks[i], offset - acc);
     acc += len + 1;   // + the "\n" after this line
   }
   const last = blocks[blocks.length - 1];
-  if (last) {
-    const tn = edFirstTextNode(last);
-    if (tn) return { node: tn, offset: tn.length };
-    return { node: last, offset: 0 };
-  }
+  if (last) return edPointInBlock(last, (last.textContent ?? '').length);
   return { node: ed, offset: 0 };
 }
 
@@ -1706,6 +1730,36 @@ function restoreTab(closedIndex: number) {
   editor.focus();
 }
 
+// Ctrl/Cmd+B / I / U: wrap the selection in markdown markers (bold **, italic *,
+// underline __), or strip them if already wrapped (toggle). With no selection,
+// drop an empty pair and park the caret between them so you can just start typing.
+function toggleInlineFormat(marker: string) {
+  const value = editor.value;
+  const start = Math.min(editor.selectionStart, editor.selectionEnd);
+  const end = Math.max(editor.selectionStart, editor.selectionEnd);
+  const sel = value.slice(start, end);
+  const m = marker.length;
+  captureForUndo();
+  if (sel.length >= 2 * m && sel.startsWith(marker) && sel.endsWith(marker)) {
+    // Markers sit inside the selection → strip them.
+    const inner = sel.slice(m, sel.length - m);
+    editor.value = value.slice(0, start) + inner + value.slice(end);
+    edSetSelection(start, start + inner.length);
+  } else if (value.slice(start - m, start) === marker && value.slice(end, end + m) === marker) {
+    // Markers sit just outside the selection → strip them.
+    editor.value = value.slice(0, start - m) + sel + value.slice(end + m);
+    edSetSelection(start - m, end - m);
+  } else {
+    // Wrap; keep the original text selected (or park the caret inside if empty).
+    editor.value = value.slice(0, start) + marker + sel + marker + value.slice(end);
+    edSetSelection(start + m, end + m);
+  }
+  previousText = editor.value;
+  scheduleSave();
+  render();
+  ensureCaretLineVisible();
+}
+
 function onKeyDown(e: KeyboardEvent) {
   // Ctrl+T (new tab), Ctrl+W (close tab), Ctrl+L (rename current tab)
   if (e.ctrlKey && !e.altKey && !e.metaKey && !e.shiftKey) {
@@ -1724,6 +1778,13 @@ function onKeyDown(e: KeyboardEvent) {
       renameActiveTab();
       return;
     }
+  }
+
+  // Ctrl/Cmd+B / I / U → bold / italic / underline the selection (toggle on/off).
+  if ((e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey) {
+    if (e.key === 'b' || e.key === 'B') { e.preventDefault(); toggleInlineFormat('**'); return; }
+    if (e.key === 'i' || e.key === 'I') { e.preventDefault(); toggleInlineFormat('*'); return; }
+    if (e.key === 'u' || e.key === 'U') { e.preventDefault(); toggleInlineFormat('__'); return; }
   }
 
   // Ctrl+Shift+T reopens the most recently closed tab (browser-style, and
@@ -2382,11 +2443,17 @@ function refreshCaretLineDisplay() {
   if (caretLine === prev) return;
   lastCaretLine = caretLine;
   overlay.innerHTML = highlightNote(editor.value, lastResults, lineModes, activeToken, caretLine);
+  applyEditorConceal(caretLine);
   const lines = editor.value.split('\n');
   const refGeometryChanged = [prev, caretLine].some(
     i => i >= 0 && i < lines.length && lineModeAt(i) === 'text' && /""[lL]\d+""/.test(lines[i])
   );
-  if (refGeometryChanged) layoutGutters();
+  // Revealing/concealing markers can change a formatted line's wrap height, so
+  // re-layout the gutters when the caret enters or leaves a text line that carries
+  // inline markers (cheap test: any * or _).
+  const concealShift = (i: number) =>
+    i >= 0 && i < lines.length && lineModeAt(i) === 'text' && /[*_]/.test(lines[i]);
+  if (refGeometryChanged || concealShift(prev) || concealShift(caretLine)) layoutGutters();
   else applyCaretHighlight(caretLine);
 }
 
