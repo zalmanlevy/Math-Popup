@@ -23,6 +23,9 @@ function migrateSettings(settings: Settings): Settings {
   if (!settings.closedPages) {
     settings.closedPages = [];
   }
+  if (!Array.isArray(settings.obsidianRecentNotes)) {
+    settings.obsidianRecentNotes = [];
+  }
   // Per-line modes: seed from the legacy per-page mode so existing notes keep
   // behaving the same (a 'math' page becomes all-math lines, otherwise text).
   for (const p of settings.pages) {

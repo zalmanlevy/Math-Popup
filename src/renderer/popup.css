@@ -558,6 +558,11 @@ body {
 }
 .tab-context-menu .ctx-item:hover { background: var(--bg-soft); }
 .tab-context-menu .ctx-item.danger:hover { background: var(--error-soft); color: var(--error); }
+.tab-context-menu .ctx-separator {
+  height: 1px;
+  margin: 4px 6px;
+  background: var(--border);
+}
 /* Mode word in the line-switch menu, color-coded to match the editor (green =
    math, blue = text) so the target mode is unmistakable. */
 .tab-context-menu .ctx-mode-math { color: var(--result); font-weight: 700; }
@@ -863,8 +868,14 @@ body {
    the overlay's colored .md-marker wrap the SAME characters, so hiding both keeps
    the two layers character-aligned (and only inline markers hide — list bullets
    .md-bullet and header hashes .md-h-marker are untouched). */
+/* Inline markers (** * __) collapse whenever the caret is off the line. */
 .ed-line.ed-conceal .ed-mk,
 .ov-line.ov-conceal .md-marker { display: none; }
+/* A task line's "- " bullet collapses unless the caret is in its marker region
+   (ed-bullet-conceal / ov-bullet-conceal are toggled per caret column, not just
+   per line — see applyEditorConceal / highlightNote). */
+.ed-line.ed-bullet-conceal .ed-task-mk,
+.ov-line.ov-bullet-conceal .md-task-bullet { display: none; }
 
 .editor {
   position: absolute;
@@ -1301,6 +1312,42 @@ body {
 .md-italic { font-style: italic; color: var(--text); }
 .md-underline { text-decoration: underline; text-underline-offset: 2px; }
 .md-marker { color: var(--text-faint); }
+.md-task-box {
+  display: inline-flex;
+  width: 3ch;
+  min-width: 3ch;
+  align-items: center;
+  justify-content: center;
+  vertical-align: -2px;
+}
+.md-task-square {
+  position: relative;
+  width: 13px;
+  height: 13px;
+  border: 1.5px solid var(--text-faint);
+  border-radius: 3px;
+  background: var(--bg-elev);
+}
+.md-task-box.checked .md-task-square {
+  border-color: var(--accent);
+  background: var(--accent);
+}
+.md-task-box.checked .md-task-square::after {
+  content: "";
+  position: absolute;
+  left: 3px;
+  top: 1px;
+  width: 4px;
+  height: 7px;
+  border: solid #fff;
+  border-width: 0 2px 2px 0;
+  transform: rotate(45deg);
+}
+.md-task-text.checked {
+  color: var(--text-soft);
+  text-decoration: line-through;
+  text-decoration-thickness: 1px;
+}
 
 /* ---------- status bar ---------- */
 .status-bar {

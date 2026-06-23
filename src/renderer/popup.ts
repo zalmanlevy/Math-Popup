@@ -1,8 +1,9 @@
 import { evaluateNote, evaluateSelectedText, LineResult, EXCEL_FORMULA_TOOLTIP, X_RESERVED_TOOLTIP, UNQUOTED_STRING_TOOLTIP, RESERVED_NAME_TOOLTIP, DUPLICATE_VAR_TOOLTIP, isExcelFunctionName } from './evaluator';
-import { highlightNote, listIndentCols, wrapInlineMarkers, ActiveToken } from './highlighter';
+import { highlightNote, listIndentCols, taskMarkerEndCol, wrapInlineMarkers, ActiveToken } from './highlighter';
 import { formatWithCommas, formatResult } from './formatter';
 import type { Mode, Page, Settings, Suffix, ThemePref } from '../shared/types';
 import { ZOOM_MIN, ZOOM_MAX, ZOOM_STEP } from '../shared/types';
+import type { ObsidianFileChange, ObsidianNotePayload } from '../main/preload';
 
 const editor = document.getElementById('editor') as HTMLTextAreaElement;
 const overlay = document.getElementById('syntax-overlay') as HTMLPreElement;
@@ -75,34 +76,27 @@ function buildEditorDOM(text: string) {
   applyEditorLineModes();
 }
 
-// Conceal inline-markdown markers (.ed-mk) on every text line except the one the
-// caret sits on — the editor half of the Obsidian-style reveal. Toggles a class
-// only (no DOM rebuild), so it's safe to call on a bare caret move. Mirrors the
-// overlay's .ov-conceal (see highlightNote) so both layers collapse the same
-// characters and stay aligned.
+// Conceal inline markers (.ed-mk) and task "- " bullets on every text line except
+// the caret's, and set each line's hanging indent — REDUCED on a concealed task
+// line, whose "- " collapses away so the wrap hangs under the checkbox text. The
+// editor half of the Obsidian reveal; toggles classes/styles only (no DOM rebuild),
+// so it's safe on a bare caret move. Mirrors the overlay (.ov-conceal +
+// listIndentCols with the same concealed flag) so both layers stay aligned.
 function applyEditorConceal(caretLine: number) {
   const divs = ed.children;
-  for (let i = 0; i < divs.length; i++) {
-    (divs[i] as HTMLElement).classList.toggle('ed-conceal', lineModeAt(i) === 'text' && i !== caretLine);
-  }
-}
-
-// Toggle the per-line math class on existing .ed-line blocks, hang-indent list
-// lines, and conceal inline markers off the caret line. Cheap and does not rebuild
-// text, so it never disturbs the caret.
-function applyEditorLineModes() {
-  const divs = ed.children;
   const lines = editor.value.split('\n');
-  const caretLine = document.activeElement === editor ? caretLineIndex() : -1;
+  const caretCol = caretLine >= 0 ? caretColumnIndex() : -1;
   for (let i = 0; i < divs.length; i++) {
     const el = divs[i] as HTMLElement;
-    const isMath = lineModeAt(i) === 'math';
-    el.classList.toggle('ed-math', isMath);
-    el.classList.toggle('ed-conceal', !isMath && i !== caretLine);
-    // Mirror the overlay's hanging indent (see listIndentCols / highlightNote)
-    // so a wrapped bullet/number line's continuation rows sit under the item
-    // text. This MUST match .ov-line exactly or the caret drifts off the text.
-    const cols = listIndentCols(lines[i] ?? '');
+    const isText = lineModeAt(i) === 'text';
+    // Inline markers reveal on the caret line; the task "- " bullet reveals only
+    // when the caret is in that line's leading marker region (keep them in sync
+    // with highlightNote).
+    const lineConceal = isText && i !== caretLine;
+    const bulletConceal = isText && !(i === caretLine && caretCol >= 0 && caretCol <= taskMarkerEndCol(lines[i] ?? ''));
+    el.classList.toggle('ed-conceal', lineConceal);
+    el.classList.toggle('ed-bullet-conceal', bulletConceal);
+    const cols = listIndentCols(lines[i] ?? '', bulletConceal);
     if (cols > 0) {
       el.style.paddingLeft = `${cols}ch`;
       el.style.textIndent = `-${cols}ch`;
@@ -111,6 +105,17 @@ function applyEditorLineModes() {
       el.style.textIndent = '';
     }
   }
+}
+
+// Toggle the per-line math class on existing .ed-line blocks. Concealment + the
+// hanging indent are handled by applyEditorConceal. Cheap and does not rebuild
+// text, so it never disturbs the caret.
+function applyEditorLineModes() {
+  const divs = ed.children;
+  for (let i = 0; i < divs.length; i++) {
+    (divs[i] as HTMLElement).classList.toggle('ed-math', lineModeAt(i) === 'math');
+  }
+  applyEditorConceal(document.activeElement === editor ? caretLineIndex() : -1);
 }
 
 // Gather a block's text and, if the selection focus is inside it, its local
@@ -291,12 +296,19 @@ let lastResults: LineResult[] = [];
 let lineModes: Mode[] = [];
 let lineModesText = '';
 let saveTimer: number | null = null;
+const OBSIDIAN_SAVE_DEBOUNCE_MS = 700;
+const obsidianSaveTimers = new Map<string, number>();
+let applyingObsidianChange = false;
 // Pending single-click line-ref insert, held briefly so a double-click can
 // pre-empt it (double-click toggles the line's math/text instead).
 let pendingRefClick: { line: number; timer: number } | null = null;
 // The line index whose ref-display was last rendered "raw" (caret on it), so we
 // only re-render on caret moves that actually change it.
 let lastCaretLine = -1;
+// The task line whose "- " bullet is currently revealed (see bulletRevealLineNow),
+// tracked so a caret move WITHIN a line (crossing the marker/text boundary) also
+// re-renders the conceal — not only line-to-line moves.
+let lastBulletRevealLine = -1;
 let activeToken: ActiveToken | null = null;
 const tabsBtn = document.getElementById('tabs-btn') as HTMLButtonElement;
 const archiveBtn = document.getElementById('archive-btn') as HTMLButtonElement;
@@ -325,6 +337,7 @@ async function init() {
     pages.push({ id, title: 'Page 1', content: settings.noteContent ?? '', mode: 'text', lineModes: ['text'] });
     activePageId = id;
   }
+  await hydrateOpenObsidianPages();
   const activePage = pages.find(p => p.id === activePageId) || pages[0];
   activePageId = activePage.id;
 
@@ -337,9 +350,20 @@ async function init() {
   bindEvents();
   // Re-render syntax overlay if the system theme flips while the app is open.
   window.mathPopup.onThemeChanged(() => render());
+  window.mathPopup.onSettingsChanged((updated) => {
+    const advancedChanged = settings.advancedMode !== updated.advancedMode;
+    settings.advancedMode = updated.advancedMode;
+    settings.obsidianRecentNotes = updated.obsidianRecentNotes ?? [];
+    if (advancedChanged) {
+      syncObsidianWatchers();
+      refreshTabBar();
+    }
+  });
+  window.mathPopup.onObsidianFileChanged(handleObsidianFileChanged);
   updatePageIndicator();
   // Restore the tab bar's expanded/collapsed state from last session.
   if (settings.tabBarOpen) showTabBar();
+  syncObsidianWatchers();
   render();
   editor.focus();
 }
@@ -424,6 +448,7 @@ function bindEvents() {
   editor.addEventListener('compositionstart', () => { edComposing = true; });
   editor.addEventListener('compositionend', () => { edComposing = false; onEditorInput(); });
   editor.addEventListener('scroll', syncScroll);
+  editor.addEventListener('mousedown', maybeToggleTaskCheckboxFromMouse);
   editor.addEventListener('keydown', onKeyDown);
   editor.addEventListener('blur', () => {
     // Defer so click on the menu can take effect.
@@ -447,7 +472,7 @@ function bindEvents() {
   document.addEventListener('selectionchange', () => {
     if (document.activeElement !== editor) return;
     edRefreshSelectionCache();
-    if (caretLineIndex() !== lastCaretLine) refreshCaretLineDisplay();
+    if (caretLineIndex() !== lastCaretLine || bulletRevealLineNow() !== lastBulletRevealLine) refreshCaretLineDisplay();
   });
   // Line-number gutter: click a number to drop its L-ref at the caret. Using
   // mousedown + preventDefault keeps the textarea focused and its caret intact
@@ -534,6 +559,10 @@ function bindEvents() {
   // Tabs: click the button to toggle the inline tab bar open/closed.
   tabsBtn.addEventListener('click', toggleTabBar);
   tabAddBtn.addEventListener('click', () => addTab());
+  tabAddBtn.addEventListener('contextmenu', (e) => {
+    e.preventDefault();
+    showNewTabContextMenu(e.clientX, e.clientY);
+  });
   // Overflow chevron: opens on hover or click, lists the clipped tabs, and
   // right-click offers "Reorder tabs". The in-between "⋯" marker shares these
   // exact triggers (see wireOverflowTrigger).
@@ -620,6 +649,21 @@ function caretLineIndex(): number {
   let n = 0;
   for (let i = 0; i < upto.length; i++) if (upto[i] === '\n') n++;
   return n;
+}
+// Column of the caret within its line (0 = line start).
+function caretColumnIndex(): number {
+  const caret = editor.selectionStart;
+  return caret - (editor.value.lastIndexOf('\n', caret - 1) + 1);
+}
+// The task line whose "- " bullet should be revealed right now: the caret line, but
+// only while the caret sits in that task line's leading marker region (so typing in
+// the task text keeps the dash hidden). -1 when none.
+function bulletRevealLineNow(): number {
+  if (document.activeElement !== editor) return -1;
+  const line = caretLineIndex();
+  const text = editor.value.split('\n')[line] ?? '';
+  if (!/^\s*[-*+]\s+\[[ xX]\]/.test(text)) return -1;
+  return caretColumnIndex() <= taskMarkerEndCol(text) ? line : -1;
 }
 // Inclusive 0-based line range the current selection touches. A collapsed caret
 // yields a single line. A selection that ends exactly at a line start (just past a
@@ -1079,6 +1123,229 @@ function ensureCaretLineVisible() {
   syncScroll();
 }
 
+function samePath(a: string | undefined, b: string | undefined): boolean {
+  if (!a || !b) return false;
+  return a === b || a.toLowerCase() === b.toLowerCase();
+}
+
+function openObsidianPaths(): string[] {
+  if (!settings?.advancedMode) return [];
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const page of pages) {
+    if (!page.obsidianPath) continue;
+    const key = page.obsidianPath.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(page.obsidianPath);
+  }
+  return out;
+}
+
+function syncObsidianWatchers() {
+  window.mathPopup.watchObsidianNotes(openObsidianPaths()).catch(() => {
+    flashStatus('Could not update Obsidian watchers', true);
+  });
+}
+
+function fitLineModesToText(modes: Mode[] | undefined, text: string): Mode[] {
+  const n = countLines(text);
+  return Array.from({ length: n }, (_, i) => modes?.[i] ?? 'text');
+}
+
+function preservePageBeforeObsidianReplace(page: Page, incomingContent: string): Page | null {
+  const existingContent = page.id === activePageId ? editor.value : page.content;
+  if (!existingContent.trim() || existingContent === incomingContent) return null;
+
+  const backup: Page = {
+    id: `${Date.now()}-backup`,
+    title: `${page.title || 'Tab'} (before Obsidian)`,
+    content: existingContent,
+    mode: page.mode || 'text',
+    lineModes: fitLineModesToText(page.lineModes, existingContent)
+  };
+  const index = pages.findIndex(p => p.id === page.id);
+  pages.splice(index >= 0 ? index + 1 : pages.length, 0, backup);
+  return backup;
+}
+
+async function hydrateOpenObsidianPages() {
+  if (!settings?.advancedMode) return;
+  await Promise.all(pages.map(async page => {
+    if (!page.obsidianPath) return;
+    try {
+      const note = await window.mathPopup.readObsidianNote(page.obsidianPath);
+      page.content = note.content;
+      page.lineModes = fitLineModesToText(page.lineModes, note.content);
+    } catch {
+      // Keep the last saved snapshot if the external note is temporarily
+      // unavailable. The watcher/read path will surface errors when active.
+    }
+  }));
+}
+
+function queueObsidianSave(page: Page | undefined, content: string, immediate = false) {
+  if (!settings?.advancedMode || !page?.obsidianPath) return;
+  const path = page.obsidianPath;
+  const existing = obsidianSaveTimers.get(path);
+  if (existing) window.clearTimeout(existing);
+  const timer = window.setTimeout(() => {
+    obsidianSaveTimers.delete(path);
+    window.mathPopup.writeObsidianNote(path, content).catch(err => {
+      flashStatus(err instanceof Error ? err.message : 'Could not sync Obsidian note', true);
+    });
+  }, immediate ? 0 : OBSIDIAN_SAVE_DEBOUNCE_MS);
+  obsidianSaveTimers.set(path, timer);
+}
+
+function applyObsidianContent(page: Page, content: string) {
+  const oldStart = editor.selectionStart;
+  const oldEnd = editor.selectionEnd;
+  const oldScroll = editor.scrollTop;
+  page.content = content;
+  page.lineModes = fitLineModesToText(page.lineModes, content);
+
+  if (page.id === activePageId) {
+    applyingObsidianChange = true;
+    try {
+      editor.value = content;
+      previousText = content;
+      loadPageModes(page);
+      const caretStart = Math.min(oldStart, content.length);
+      const caretEnd = Math.min(oldEnd, content.length);
+      editor.selectionStart = caretStart;
+      editor.selectionEnd = caretEnd;
+      editor.scrollTop = oldScroll;
+      render();
+    } finally {
+      applyingObsidianChange = false;
+    }
+  }
+}
+
+function handleObsidianFileChanged(note: ObsidianFileChange) {
+  if (!settings?.advancedMode) return;
+  const page = pages.find(p => samePath(p.obsidianPath, note.path));
+  if (!page) return;
+  if (note.error) {
+    flashStatus(`Obsidian sync paused: ${note.error}`, true);
+    return;
+  }
+  if (typeof note.content !== 'string') return;
+  if (obsidianSaveTimers.has(page.obsidianPath!)) return;
+  const currentText = page.id === activePageId ? editor.value : page.content;
+  if (currentText === note.content) return;
+  applyObsidianContent(page, note.content);
+  window.mathPopup.setSettings({ pages, activePageId, closedPages });
+  flashStatus('Updated from Obsidian');
+}
+
+function rememberObsidianNote(note: ObsidianNotePayload) {
+  const existing = settings.obsidianRecentNotes ?? [];
+  const next = [
+    { path: note.path, title: note.title, lastOpenedAt: Date.now() },
+    ...existing.filter(n => !samePath(n.path, note.path))
+  ].slice(0, 20);
+  settings.obsidianRecentNotes = next;
+  window.mathPopup.setSettings({ obsidianRecentNotes: next });
+}
+
+async function connectPageToObsidian(pageId: string) {
+  if (!settings?.advancedMode) return;
+  try {
+    const note = await window.mathPopup.chooseObsidianNote();
+    if (!note) return;
+    const alreadyOpen = pages.find(p => samePath(p.obsidianPath, note.path));
+    if (alreadyOpen && alreadyOpen.id !== pageId) {
+      switchTab(alreadyOpen.id);
+      flashStatus('Obsidian note is already open');
+      return;
+    }
+
+    const page = pages.find(p => p.id === pageId);
+    if (!page) return;
+    const current = pages.find(p => p.id === activePageId);
+    if (current?.obsidianPath) {
+      current.content = editor.value;
+      current.lineModes = [...lineModes];
+      queueObsidianSave(current, editor.value, true);
+    }
+
+    const backup = preservePageBeforeObsidianReplace(page, note.content);
+    page.obsidianPath = note.path;
+    page.content = note.content;
+    page.lineModes = fitLineModesToText(page.lineModes, note.content);
+    rememberObsidianNote(note);
+
+    if (page.id === activePageId) {
+      editor.value = note.content;
+      previousText = editor.value;
+      loadPageModes(page);
+      render();
+      editor.focus();
+    }
+
+    window.mathPopup.setSettings({
+      pages,
+      activePageId,
+      closedPages,
+      obsidianRecentNotes: settings.obsidianRecentNotes
+    });
+    syncObsidianWatchers();
+    updatePageIndicator();
+    flashStatus(backup ? `Connected to Obsidian; saved previous content as ${backup.title}` : 'Connected to Obsidian');
+  } catch (err) {
+    flashStatus(err instanceof Error ? err.message : 'Could not connect Obsidian note', true);
+  }
+}
+
+async function openObsidianNote(notePath: string) {
+  if (!settings?.advancedMode) return;
+  const alreadyOpen = pages.find(p => samePath(p.obsidianPath, notePath));
+  if (alreadyOpen) {
+    switchTab(alreadyOpen.id);
+    return;
+  }
+  try {
+    const note = await window.mathPopup.readObsidianNote(notePath);
+    if (pages.length >= 99) return;
+    const current = pages.find(p => p.id === activePageId);
+    if (current) {
+      current.content = editor.value;
+      current.lineModes = [...lineModes];
+      queueObsidianSave(current, editor.value, true);
+    }
+
+    const page: Page = {
+      id: Date.now().toString(),
+      title: note.title,
+      content: note.content,
+      mode: 'text',
+      lineModes: fitLineModesToText(undefined, note.content),
+      obsidianPath: note.path
+    };
+    pages.push(page);
+    activePageId = page.id;
+    editor.value = note.content;
+    previousText = editor.value;
+    loadPageModes(page);
+    rememberObsidianNote(note);
+    window.mathPopup.setSettings({
+      pages,
+      activePageId,
+      closedPages,
+      obsidianRecentNotes: settings.obsidianRecentNotes
+    });
+    syncObsidianWatchers();
+    updatePageIndicator();
+    render();
+    editor.focus();
+    flashStatus('Opened Obsidian note');
+  } catch (err) {
+    flashStatus(err instanceof Error ? err.message : 'Could not open Obsidian note', true);
+  }
+}
+
 function scheduleSave() {
   if (saveTimer) window.clearTimeout(saveTimer);
   saveTimer = window.setTimeout(() => {
@@ -1086,6 +1353,9 @@ function scheduleSave() {
     if (activePage) { activePage.content = editor.value; activePage.lineModes = [...lineModes]; }
     window.mathPopup.setSettings({ pages, activePageId });
   }, 250);
+  if (!applyingObsidianChange) {
+    queueObsidianSave(pages.find(p => p.id === activePageId), editor.value);
+  }
 }
 
 let archiveHoverTimer: number | null = null;
@@ -1417,7 +1687,7 @@ function renderTabBar() {
     chip.dataset.pageId = page.id;
     chip.draggable = true;
     const label = page.title || `Page ${index + 1}`;
-    chip.title = label;
+    chip.title = page.obsidianPath ? `${label}\n${page.obsidianPath}` : label;
     chip.onclick = (e) => {
       // Don't switch if interacting with the inline rename input
       if ((e.target as HTMLElement).tagName === 'INPUT') return;
@@ -1562,6 +1832,12 @@ function showTabContextMenu(pageId: string | null, x: number, y: number) {
   };
   if (pageId) {
     addItem('Rename', 'Ctrl+L', false, () => startRename(pageId));
+    if (settings?.advancedMode) {
+      const page = pages.find(p => p.id === pageId);
+      addItem(page?.obsidianPath ? 'Reconnect Obsidian' : 'Connect to Obsidian', '', false, () => {
+        connectPageToObsidian(pageId);
+      });
+    }
     addItem('Close tab', 'Ctrl+W', true, () => { closeTab(pageId); refreshOverflowPopup(); });
   }
   addItem('Reorder tabs', '', false, () => enterReorderMode());
@@ -1569,6 +1845,43 @@ function showTabContextMenu(pageId: string | null, x: number, y: number) {
   placeContextMenuAt(x, y);
 }
 function hideTabContextMenu() { contextMenu.hidden = true; }
+
+function showNewTabContextMenu(x: number, y: number) {
+  contextMenu.innerHTML = '';
+  const addItem = (label: string, hint: string, onPick: () => void) => {
+    const item = document.createElement('div');
+    item.className = 'ctx-item';
+    const text = document.createElement('span');
+    text.textContent = label;
+    item.appendChild(text);
+    if (hint) {
+      const k = document.createElement('span');
+      k.className = 'ctx-key';
+      k.textContent = hint;
+      item.appendChild(k);
+    }
+    item.onclick = () => { hideTabContextMenu(); onPick(); };
+    contextMenu.appendChild(item);
+  };
+
+  addItem('New tab', '', () => addTab());
+  if (settings?.advancedMode) {
+    const openPaths = new Set(pages.filter(p => p.obsidianPath).map(p => p.obsidianPath!.toLowerCase()));
+    const notes = (settings.obsidianRecentNotes ?? [])
+      .filter(note => !openPaths.has(note.path.toLowerCase()))
+      .slice(0, 10);
+    if (notes.length > 0) {
+      const sep = document.createElement('div');
+      sep.className = 'ctx-separator';
+      contextMenu.appendChild(sep);
+      for (const note of notes) {
+        addItem(note.title || 'Obsidian note', 'Obsidian', () => openObsidianNote(note.path));
+      }
+    }
+  }
+
+  placeContextMenuAt(x, y);
+}
 
 // Show the menu (already populated) clamped inside the window.
 function placeContextMenuAt(x: number, y: number) {
@@ -1640,7 +1953,11 @@ function switchTab(id: string) {
   if (id === activePageId) return;
   justClosedTab = false;
   const current = pages.find(p => p.id === activePageId);
-  if (current) current.content = editor.value;
+  if (current) {
+    current.content = editor.value;
+    current.lineModes = [...lineModes];
+    queueObsidianSave(current, editor.value, true);
+  }
   
   activePageId = id;
   const next = pages.find(p => p.id === activePageId)!;
@@ -1659,7 +1976,11 @@ function addTab() {
   if (pages.length >= 99) return;
   justClosedTab = false;
   const current = pages.find(p => p.id === activePageId);
-  if (current) { current.content = editor.value; current.lineModes = [...lineModes]; }
+  if (current) {
+    current.content = editor.value;
+    current.lineModes = [...lineModes];
+    queueObsidianSave(current, editor.value, true);
+  }
 
   const id = Date.now().toString();
   const title = `Page ${pages.length + 1}`;
@@ -1682,7 +2003,11 @@ function closeTab(id: string) {
   if (index === -1) return;
   
   const current = pages[index];
-  if (id === activePageId) { current.content = editor.value; current.lineModes = [...lineModes]; }
+  if (id === activePageId) {
+    current.content = editor.value;
+    current.lineModes = [...lineModes];
+    queueObsidianSave(current, editor.value, true);
+  }
   closedPages.unshift(current);
   if (closedPages.length > 10) closedPages.pop();
 
@@ -1702,6 +2027,7 @@ function closeTab(id: string) {
 
   loadPageModes(next);
   window.mathPopup.setSettings({ pages, activePageId, closedPages });
+  syncObsidianWatchers();
 
   updatePageIndicator();
   render();
@@ -1714,7 +2040,11 @@ function restoreTab(closedIndex: number) {
   justClosedTab = false;
   const page = closedPages.splice(closedIndex, 1)[0];
   const current = pages.find(p => p.id === activePageId);
-  if (current) { current.content = editor.value; current.lineModes = [...lineModes]; }
+  if (current) {
+    current.content = editor.value;
+    current.lineModes = [...lineModes];
+    queueObsidianSave(current, editor.value, true);
+  }
 
   pages.push(page);
   activePageId = page.id;
@@ -1724,10 +2054,27 @@ function restoreTab(closedIndex: number) {
 
   loadPageModes(page);
   window.mathPopup.setSettings({ pages, activePageId, closedPages });
+  syncObsidianWatchers();
   
   updatePageIndicator();
   render();
   editor.focus();
+  if (settings?.advancedMode && page.obsidianPath) {
+    window.mathPopup.readObsidianNote(page.obsidianPath).then(note => {
+      if (activePageId !== page.id) return;
+      applyObsidianContent(page, note.content);
+      rememberObsidianNote(note);
+      window.mathPopup.setSettings({
+        pages,
+        activePageId,
+        closedPages,
+        obsidianRecentNotes: settings.obsidianRecentNotes
+      });
+      updatePageIndicator();
+    }).catch(err => {
+      flashStatus(err instanceof Error ? err.message : 'Could not refresh Obsidian note', true);
+    });
+  }
 }
 
 // Ctrl/Cmd+B / I / U: wrap the selection in markdown markers (bold **, italic *,
@@ -1998,7 +2345,7 @@ function matchTrailingSuffix(text: string, pos: number): number {
 // decimals like "1.5" from being treated as lists.
 interface ListMarker {
   indent: string; bullet?: string; num?: string; delim?: string;
-  spaceAfter: string; content: string; markerLen: number;
+  spaceAfter: string; content: string; markerLen: number; task?: string; taskSpaceAfter?: string;
 }
 function parseListLine(line: string): ListMarker | null {
   const m = /^(\s*)(?:([-*+])|(\d+)([.)]))(\s*)(.*)$/.exec(line);
@@ -2007,7 +2354,10 @@ function parseListLine(line: string): ListMarker | null {
   const hasContent = content.trim().length > 0;
   if (spaceAfter.length === 0 && !(num && !hasContent)) return null;
   const markerLen = indent.length + (bullet ? bullet.length : num!.length + delim!.length) + spaceAfter.length;
-  return { indent, bullet, num, delim, spaceAfter, content, markerLen };
+  const taskMatch = bullet ? /^(\[[ xX]\])(\s*)(.*)$/.exec(content) : null;
+  return taskMatch
+    ? { indent, bullet, num, delim, spaceAfter, content: taskMatch[3], markerLen: markerLen + taskMatch[1].length + taskMatch[2].length, task: taskMatch[1], taskSpaceAfter: taskMatch[2] }
+    : { indent, bullet, num, delim, spaceAfter, content, markerLen };
 }
 
 // "/math" or "/text" alone on a line: convert that line's mode and strip the
@@ -2063,7 +2413,9 @@ function handleListContinuation(): boolean {
     editor.value = text.slice(0, lineStart) + text.slice(lineEnd);
     editor.selectionStart = editor.selectionEnd = lineStart;
   } else {
-    const nextMarker = mk.bullet ? `${mk.bullet} ` : `${parseInt(mk.num!, 10) + 1}${mk.delim} `;
+    const nextMarker = mk.task
+      ? `${mk.bullet} [ ] `
+      : mk.bullet ? `${mk.bullet} ` : `${parseInt(mk.num!, 10) + 1}${mk.delim} `;
     const insertion = `\n${mk.indent}${nextMarker}`;
     editor.value = text.slice(0, caret) + insertion + text.slice(caret);
     editor.selectionStart = editor.selectionEnd = caret + insertion.length;
@@ -2255,7 +2607,9 @@ function render() {
   // previous results lets the evaluator carry over last-good values mid-edit.
   lastResults = evaluateNote(editor.value, settings.suffixes, lastResults, settings.decimals, lineModes);
   lastCaretLine = document.activeElement === editor ? caretLineIndex() : -1;
-  overlay.innerHTML = highlightNote(editor.value, lastResults, lineModes, activeToken, lastCaretLine);
+  lastBulletRevealLine = bulletRevealLineNow();
+  const caretCol = document.activeElement === editor ? caretColumnIndex() : -1;
+  overlay.innerHTML = highlightNote(editor.value, lastResults, lineModes, activeToken, lastCaretLine, caretCol);
   layoutGutters();
   // Sync scroll AFTER rebuilding the overlay + gutters + result overlay — each
   // innerHTML assignment resets that layer's scrollTop to 0, so syncing earlier
@@ -2439,20 +2793,24 @@ function applyActiveLrefHighlight() {
 // a real re-layout to keep the result rows aligned.
 function refreshCaretLineDisplay() {
   const caretLine = document.activeElement === editor ? caretLineIndex() : -1;
+  const reveal = bulletRevealLineNow();
   const prev = lastCaretLine;
-  if (caretLine === prev) return;
+  if (caretLine === prev && reveal === lastBulletRevealLine) return;
   lastCaretLine = caretLine;
-  overlay.innerHTML = highlightNote(editor.value, lastResults, lineModes, activeToken, caretLine);
+  lastBulletRevealLine = reveal;
+  const caretCol = document.activeElement === editor ? caretColumnIndex() : -1;
+  overlay.innerHTML = highlightNote(editor.value, lastResults, lineModes, activeToken, caretLine, caretCol);
   applyEditorConceal(caretLine);
   const lines = editor.value.split('\n');
   const refGeometryChanged = [prev, caretLine].some(
     i => i >= 0 && i < lines.length && lineModeAt(i) === 'text' && /""[lL]\d+""/.test(lines[i])
   );
-  // Revealing/concealing markers can change a formatted line's wrap height, so
-  // re-layout the gutters when the caret enters or leaves a text line that carries
-  // inline markers (cheap test: any * or _).
+  // Revealing/concealing markers (or a task "- " bullet, which also shifts the
+  // hanging indent) can change a line's wrap height, so re-layout the gutters when
+  // the caret enters or leaves such a text line.
   const concealShift = (i: number) =>
-    i >= 0 && i < lines.length && lineModeAt(i) === 'text' && /[*_]/.test(lines[i]);
+    i >= 0 && i < lines.length && lineModeAt(i) === 'text' &&
+    (/[*_]/.test(lines[i]) || /^\s*[-*+]\s+\[[ xX]\]/.test(lines[i]));
   if (refGeometryChanged || concealShift(prev) || concealShift(caretLine)) layoutGutters();
   else applyCaretHighlight(caretLine);
 }
@@ -3041,6 +3399,48 @@ function insertLineRefAtCaret(line: number) {
   render();
   editor.focus();
   ensureCaretLineVisible();
+}
+
+function taskCheckboxLineAtPoint(x: number, y: number): number {
+  const boxes = overlay.querySelectorAll<HTMLElement>('.md-task-box[data-task-line]');
+  for (const box of Array.from(boxes)) {
+    const r = box.getBoundingClientRect();
+    const pad = 3;
+    if (x >= r.left - pad && x <= r.right + pad && y >= r.top - pad && y <= r.bottom + pad) {
+      const line = Number(box.dataset.taskLine);
+      return Number.isFinite(line) ? line : -1;
+    }
+  }
+  return -1;
+}
+
+function maybeToggleTaskCheckboxFromMouse(e: MouseEvent) {
+  const lineIndex = taskCheckboxLineAtPoint(e.clientX, e.clientY);
+  if (lineIndex < 0) return;
+  if (e.button !== 0) return;
+  e.preventDefault();
+  e.stopPropagation();
+  toggleTaskCheckbox(lineIndex);
+}
+
+function toggleTaskCheckbox(lineIndex: number) {
+  const lines = editor.value.split('\n');
+  const line = lines[lineIndex];
+  if (line === undefined) return;
+  const m = /^(\s*[-*+]\s+\[)([ xX])(\])/.exec(line);
+  if (!m) return;
+  const lineStart = lines.slice(0, lineIndex).join('\n').length + (lineIndex === 0 ? 0 : 1);
+  const markOffset = lineStart + m[1].length;
+  const nextMark = m[2].toLowerCase() === 'x' ? ' ' : 'x';
+  const nextValue = editor.value.slice(0, markOffset) + nextMark + editor.value.slice(markOffset + 1);
+  if (nextValue === editor.value) return;
+  captureForUndo();
+  editor.value = nextValue;
+  editor.selectionStart = editor.selectionEnd = markOffset + 1;
+  previousText = editor.value;
+  scheduleSave();
+  render();
+  editor.focus();
 }
 
 // True when the caret is inside an Excel function's parentheses AND the
@@ -3739,7 +4139,7 @@ function updateActiveToken() {
   // Lightweight re-render: refresh the active-token highlight in the overlay and
   // the gutter's referenced-line marker. The answer column is unaffected by which
   // token is active, so it is NOT rebuilt — that avoids the click-time reflow.
-  overlay.innerHTML = highlightNote(editor.value, lastResults, lineModes, activeToken, lastCaretLine);
+  overlay.innerHTML = highlightNote(editor.value, lastResults, lineModes, activeToken, lastCaretLine, document.activeElement === editor ? caretColumnIndex() : -1);
   applyActiveLrefHighlight();
 }
 

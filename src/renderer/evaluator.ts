@@ -103,6 +103,7 @@ export interface LineResult {
 }
 
 const HEADER_RE = /^(\s*)(#{1,6})\s+(.*)$/;
+const TASK_RE = /^(\s*)[-*+]\s+\[[ xX]\]\s+.*$/;
 const BULLET_RE = /^(\s*)([-*])\s+(.*)$/;
 const ASSIGN_RE = /^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.+?)\s*$/;
 const LINE_REF_RE = /\bL(\d+)\b/gi;
@@ -307,6 +308,9 @@ function evaluateLine(raw: string, index: number, ctx: PreprocessCtx): LineResul
   // Header lines: no math, no result.
   const hdr = HEADER_RE.exec(raw);
   if (hdr) return { index, kind: 'header', raw, display: '' };
+
+  // Obsidian-style task list lines are text, even on math-mode lines.
+  if (TASK_RE.test(raw)) return { index, kind: 'bullet', raw, display: '' };
 
   // Bullet lines: evaluate the content portion.
   const blt = BULLET_RE.exec(raw);

@@ -30,7 +30,7 @@ export interface HighlightContext {
 // parseListLine() in popup.ts and the header arm mirrors tokenizeLine()'s hMatch
 // — keep them in sync. Applied identically to every render layer (.ed-line,
 // .ov-line, find layer) so the caret never drifts from the colored text.
-export function listIndentCols(line: string): number {
+export function listIndentCols(line: string, bulletConcealed = false): number {
   // Markdown header: "# " … "###### " (must track tokenizeLine's hMatch).
   const h = /^(\s*)(#{1,6})(\s+)/.exec(line);
   if (h) return h[1].length + h[2].length + h[3].length;
@@ -39,10 +39,34 @@ export function listIndentCols(line: string): number {
   const [, indent, bullet, num, delim, spaceAfter, content] = m;
   const hasContent = content.trim().length > 0;
   if (spaceAfter.length === 0 && !(num && !hasContent)) return 0;
-  return indent.length + (bullet ? bullet.length : num!.length + delim!.length) + spaceAfter.length;
+  let cols = indent.length + (bullet ? bullet.length : num!.length + delim!.length) + spaceAfter.length;
+  // Task checkbox after a bullet ("- [ ] ..."): hang the wrap under the text AFTER
+  // the box, not under the box. The box renders at a fixed 3ch (== its raw "[ ]"
+  // width), so counting the raw characters keeps the indent aligned. Mirrors the
+  // task branch in parseListLine() (popup.ts).
+  if (bullet) {
+    const task = /^(\[[ xX]\])(\s*)/.exec(content);
+    if (task) {
+      cols += task[1].length + task[2].length;
+      // A concealed task line collapses its "- " bullet+gap away (caret off the
+      // line), so the wrap then hangs under the checkbox text — drop that width.
+      if (bulletConcealed) cols -= bullet.length + spaceAfter.length;
+    }
+  }
+  return cols;
 }
 
-export function highlightNote(text: string, lineResults: LineResult[], lineModes: Mode[] = [], activeToken?: ActiveToken | null, caretLine = -1): string {
+// Column just after a task line's "]" — lead + "- " + "[ ]", i.e. the last caret
+// position still counted as "on the checkbox marker". The "- " bullet reveals at or
+// before this column, but NOT in the trailing space or the text after it. Returns
+// -1 when the line isn't a task line.
+export function taskMarkerEndCol(line: string): number {
+  const m = /^(\s*)([-*+])(\s+)(\[[ xX]\])/.exec(line);
+  if (!m) return -1;
+  return m[1].length + m[2].length + m[3].length + m[4].length;
+}
+
+export function highlightNote(text: string, lineResults: LineResult[], lineModes: Mode[] = [], activeToken?: ActiveToken | null, caretLine = -1, caretCol = -1): string {
   const lines = text.split('\n');
   const knownVariables = new Set<string>();
   for (const r of lineResults) {
@@ -54,23 +78,28 @@ export function highlightNote(text: string, lineResults: LineResult[], lineModes
     .map((line, i) => {
       const r = lineResults[i];
       const mode: Mode = lineModes[i] ?? 'text';
-      const tokens = tokenizeLine(line, r, ctx, mode, activeToken, lineResults, i === caretLine);
+      const tokens = tokenizeLine(line, r, ctx, mode, activeToken, lineResults, i === caretLine, i);
       // Each line is its own block so layoutGutters can read per-line heights and
       // so each line wraps independently: math lines get .ov-math (reserving the
       // answer column via right padding) while text lines use the full width.
+      // Obsidian-style conceal. Inline bold/italic/underline markers reveal whenever
+      // the caret is on the line; a task line's "- " bullet reveals only while the
+      // caret sits in that line's leading marker region (so typing the task text
+      // keeps the dash hidden). caretLine === -1 when unfocused, so all reads clean.
+      const isText = mode === 'text';
+      const lineConceal = isText && i !== caretLine;
+      const bulletConceal = isText && !(i === caretLine && caretCol >= 0 && caretCol <= taskMarkerEndCol(line));
       let cls = mode === 'math' ? 'ov-line ov-math' : 'ov-line';
-      // Obsidian-style conceal: collapse inline bold/italic/underline markers on
-      // every text line except the one the caret is on (caretLine === -1 when the
-      // editor isn't focused, so everything reads clean).
-      if (mode === 'text' && i !== caretLine) cls += ' ov-conceal';
-      const indent = listIndentCols(line);
+      if (lineConceal) cls += ' ov-conceal';
+      if (bulletConceal) cls += ' ov-bullet-conceal';
+      const indent = listIndentCols(line, bulletConceal);
       const style = indent > 0 ? ` style="padding-left:${indent}ch;text-indent:-${indent}ch"` : '';
       return `<div class="${cls}"${style}>${tokens || '&#8203;'}</div>`;
     })
     .join('');
 }
 
-function tokenizeLine(line: string, r: LineResult | undefined, ctx: HighlightContext, mode: Mode, activeToken: ActiveToken | null | undefined, lineResults: LineResult[], isCaretLine: boolean): string {
+function tokenizeLine(line: string, r: LineResult | undefined, ctx: HighlightContext, mode: Mode, activeToken: ActiveToken | null | undefined, lineResults: LineResult[], isCaretLine: boolean, lineIndex: number): string {
   if (line.length === 0) return '';
 
   // `/no_dec_limit` / `/clear` directive line — render as a single styled
@@ -88,6 +117,20 @@ function tokenizeLine(line: string, r: LineResult | undefined, ctx: HighlightCon
     const [, lead, hashes, gap, rest] = hMatch;
     const cls = hashes.length === 1 ? 'md-h1' : hashes.length === 2 ? 'md-h2' : 'md-h3';
     return `${escapeHtml(lead)}<span class="md-h-marker">${escapeHtml(hashes)}</span>${escapeHtml(gap)}<span class="${cls}">${highlightInlineMarkdown(escapeHtml(rest))}</span>`;
+  }
+
+  // Obsidian task checkbox: keep the checkbox marker at exactly 3ch wide so the
+  // overlay remains aligned with the editable raw `[ ]` / `[x]` text.
+  const taskMatch = /^(\s*)([-*+])(\s+)(\[[ xX]\])(\s*)(.*)$/.exec(line);
+  if (taskMatch) {
+    const [, lead, mark, gap, box, afterBox, rest] = taskMatch;
+    const checked = /\[[xX]\]/.test(box);
+    const taskCls = checked ? 'md-task-box checked' : 'md-task-box';
+    const textCls = checked ? 'md-task-text checked' : 'md-task-text';
+    const inner = mode === 'math' ? tokenizeMath(rest, r, ctx, activeToken) : renderTextContent(rest, lineResults, isCaretLine);
+    return `${escapeHtml(lead)}<span class="md-task-bullet"><span class="md-bullet">${escapeHtml(mark)}</span>${escapeHtml(gap)}</span>` +
+      `<span class="${taskCls}" data-task-line="${lineIndex}" aria-hidden="true"><span class="md-task-square"></span></span>` +
+      `${escapeHtml(afterBox)}<span class="${textCls}">${inner}</span>`;
   }
 
   // Markdown bullet
@@ -252,6 +295,17 @@ function highlightInlineMarkdown(s: string): string {
 // the same width as plain). Lines with no markers come back as plain escaped text,
 // i.e. a single text node, exactly as before.
 export function wrapInlineMarkers(line: string): string {
+  // A task line also conceals its "- " bullet (an unfocused task reads as just the
+  // checkbox). Wrap that prefix in .ed-mk, keeping the nesting lead visible, then
+  // wrap the inline markers in the rest.
+  const task = /^(\s*)([-*+])(\s+)(\[[ xX]\].*)$/.exec(line);
+  if (task) {
+    const [, lead, mark, gap, rest] = task;
+    return escapeHtml(lead) + `<span class="ed-task-mk">${escapeHtml(mark + gap)}</span>` + wrapInlineSpans(rest);
+  }
+  return wrapInlineSpans(line);
+}
+function wrapInlineSpans(line: string): string {
   let s = escapeHtml(line);
   s = s.replace(/\*\*([^*\n]+)\*\*/g, '<span class="ed-mk">**</span>$1<span class="ed-mk">**</span>');
   s = s.replace(/__([^_\n]+)__/g, '<span class="ed-mk">__</span>$1<span class="ed-mk">__</span>');

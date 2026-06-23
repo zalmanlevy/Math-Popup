@@ -4,6 +4,7 @@ import type { UpdateState } from '../main/preload';
 
 const launchAtStartupEl = document.getElementById('launch-at-startup') as HTMLInputElement;
 const taskbarIconEl = document.getElementById('taskbar-icon') as HTMLInputElement;
+const advancedModeEl = document.getElementById('advanced-mode') as HTMLInputElement;
 const autoFormatEl = document.getElementById('auto-format') as HTMLInputElement;
 const expandSuffixesEl = document.getElementById('expand-suffixes') as HTMLInputElement;
 const decimalsEl = document.getElementById('decimals') as HTMLInputElement;
@@ -53,6 +54,7 @@ function applyTheme(theme: ThemePref) {
 function hydrate() {
   launchAtStartupEl.checked = settings.launchAtStartup;
   taskbarIconEl.checked = settings.showTaskbarIcon;
+  advancedModeEl.checked = settings.advancedMode;
   autoFormatEl.checked = settings.autoFormatNumbers;
   expandSuffixesEl.checked = settings.expandSuffixesInEditor;
   decimalsEl.value = String(settings.decimals);
@@ -63,6 +65,7 @@ function hydrate() {
 function bind() {
   launchAtStartupEl.addEventListener('change', () => save({ launchAtStartup: launchAtStartupEl.checked }));
   taskbarIconEl.addEventListener('change', () => save({ showTaskbarIcon: taskbarIconEl.checked }));
+  advancedModeEl.addEventListener('change', () => save({ advancedMode: advancedModeEl.checked }));
   autoFormatEl.addEventListener('change', () => save({ autoFormatNumbers: autoFormatEl.checked }));
   expandSuffixesEl.addEventListener('change', () => save({ expandSuffixesInEditor: expandSuffixesEl.checked }));
   decimalsEl.addEventListener('change', () => {

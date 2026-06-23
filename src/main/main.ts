@@ -1,6 +1,8 @@
-import { app, BrowserWindow, Tray, Menu, nativeImage, ipcMain, screen, globalShortcut, nativeTheme } from 'electron';
-import { join } from 'node:path';
-import { appendFileSync } from 'node:fs';
+import { app, BrowserWindow, Tray, Menu, nativeImage, ipcMain, screen, globalShortcut, nativeTheme, dialog } from 'electron';
+import { basename, extname, join, resolve } from 'node:path';
+import { appendFileSync, watch } from 'node:fs';
+import type { FSWatcher } from 'node:fs';
+import { readFile, stat, writeFile } from 'node:fs/promises';
 import { loadSettings, saveSettings, flushSettings } from './store';
 import { Settings } from '../shared/types';
 import { autoUpdater } from 'electron-updater';
@@ -31,6 +33,23 @@ interface UpdateState {
 
 let updateState: UpdateState = { phase: 'idle' };
 
+interface ObsidianNotePayload {
+  path: string;
+  title: string;
+  content: string;
+  mtimeMs: number;
+}
+
+interface ObsidianWatchEntry {
+  watcher: FSWatcher;
+  timer: NodeJS.Timeout | null;
+}
+
+const OBSIDIAN_CHANGE_DEBOUNCE_MS = 300;
+const SELF_WRITE_SUPPRESS_MS = 2500;
+const obsidianWatchers = new Map<string, ObsidianWatchEntry>();
+const obsidianSelfWrites = new Map<string, { content: string; expiresAt: number }>();
+
 const UPDATE_CHECK_INTERVAL_MS = 4 * 60 * 60 * 1000; // 4 hours
 const INITIAL_UPDATE_DELAY_MS = 30 * 1000; // 30 seconds after launch
 
@@ -42,6 +61,116 @@ const HELP_HTML = join(__dirname, '..', 'renderer', 'help.html');
 
 const LIGHT_BG = '#fafafa';
 const DARK_BG = '#0f1115';
+
+function normalizeMarkdownPath(input: unknown): string | null {
+  if (typeof input !== 'string' || !input.trim()) return null;
+  const fullPath = resolve(input);
+  const ext = extname(fullPath).toLowerCase();
+  return ext === '.md' || ext === '.markdown' ? fullPath : null;
+}
+
+function noteTitleFromPath(notePath: string): string {
+  const ext = extname(notePath);
+  return basename(notePath, ext) || 'Obsidian note';
+}
+
+async function readObsidianNote(inputPath: unknown): Promise<ObsidianNotePayload> {
+  const notePath = normalizeMarkdownPath(inputPath);
+  if (!notePath) throw new Error('Choose a Markdown note (.md).');
+  const [content, info] = await Promise.all([
+    readFile(notePath, 'utf8'),
+    stat(notePath)
+  ]);
+  if (!info.isFile()) throw new Error('The selected path is not a file.');
+  return {
+    path: notePath,
+    title: noteTitleFromPath(notePath),
+    content,
+    mtimeMs: info.mtimeMs
+  };
+}
+
+async function writeObsidianNote(inputPath: unknown, content: unknown): Promise<ObsidianNotePayload> {
+  const notePath = normalizeMarkdownPath(inputPath);
+  if (!notePath) throw new Error('Choose a Markdown note (.md).');
+  const text = typeof content === 'string' ? content : '';
+  obsidianSelfWrites.set(notePath, {
+    content: text,
+    expiresAt: Date.now() + SELF_WRITE_SUPPRESS_MS
+  });
+  setTimeout(() => pruneSelfWrite(notePath), SELF_WRITE_SUPPRESS_MS + 100);
+  await writeFile(notePath, text, 'utf8');
+  return readObsidianNote(notePath);
+}
+
+function pruneSelfWrite(notePath: string) {
+  const selfWrite = obsidianSelfWrites.get(notePath);
+  if (selfWrite && selfWrite.expiresAt <= Date.now()) {
+    obsidianSelfWrites.delete(notePath);
+  }
+}
+
+function scheduleObsidianRead(notePath: string) {
+  const entry = obsidianWatchers.get(notePath);
+  if (!entry) return;
+  if (entry.timer) clearTimeout(entry.timer);
+  entry.timer = setTimeout(() => {
+    entry.timer = null;
+    emitObsidianChange(notePath);
+  }, OBSIDIAN_CHANGE_DEBOUNCE_MS);
+}
+
+async function emitObsidianChange(notePath: string) {
+  if (!popupWindow || popupWindow.isDestroyed()) return;
+  try {
+    const note = await readObsidianNote(notePath);
+    pruneSelfWrite(notePath);
+    const selfWrite = obsidianSelfWrites.get(notePath);
+    if (selfWrite && selfWrite.content === note.content) return;
+    popupWindow.webContents.send('obsidian:fileChanged', note);
+  } catch (err) {
+    popupWindow.webContents.send('obsidian:fileChanged', {
+      path: notePath,
+      error: err instanceof Error ? err.message : String(err)
+    });
+  }
+}
+
+function stopObsidianWatcher(notePath: string) {
+  const entry = obsidianWatchers.get(notePath);
+  if (!entry) return;
+  if (entry.timer) clearTimeout(entry.timer);
+  entry.watcher.close();
+  obsidianWatchers.delete(notePath);
+}
+
+function updateObsidianWatchers(paths: unknown): string[] {
+  const requested = new Set<string>();
+  if (Array.isArray(paths)) {
+    for (const p of paths) {
+      const notePath = normalizeMarkdownPath(p);
+      if (notePath) requested.add(notePath);
+    }
+  }
+
+  for (const notePath of Array.from(obsidianWatchers.keys())) {
+    if (!requested.has(notePath)) stopObsidianWatcher(notePath);
+  }
+
+  for (const notePath of requested) {
+    if (obsidianWatchers.has(notePath)) continue;
+    try {
+      const watcher = watch(notePath, { persistent: false }, () => scheduleObsidianRead(notePath));
+      watcher.on('error', () => stopObsidianWatcher(notePath));
+      obsidianWatchers.set(notePath, { watcher, timer: null });
+    } catch {
+      // Invalid/deleted files are skipped; the renderer can still request a
+      // read and surface the error when the user opens the note.
+    }
+  }
+
+  return Array.from(obsidianWatchers.keys());
+}
 
 function currentBg(): string {
   return nativeTheme.shouldUseDarkColors ? DARK_BG : LIGHT_BG;
@@ -56,6 +185,14 @@ function broadcastTheme() {
     if (w && !w.isDestroyed()) {
       w.webContents.send('theme:changed', nativeTheme.shouldUseDarkColors ? 'dark' : 'light');
       w.setBackgroundColor(currentBg());
+    }
+  }
+}
+
+function broadcastSettingsChanged(settings: Settings) {
+  for (const w of [popupWindow, settingsWindow, helpWindow]) {
+    if (w && !w.isDestroyed()) {
+      w.webContents.send('settings:changed', settings);
     }
   }
 }
@@ -115,6 +252,7 @@ function createPopup() {
   popupWindow.on('resize', persistBounds);
 
   popupWindow.on('closed', () => {
+    updateObsidianWatchers([]);
     popupWindow = null;
   });
 }
@@ -269,6 +407,7 @@ function registerIPC() {
         popupWindow.setSkipTaskbar(!updated.showTaskbarIcon);
       }
     }
+    broadcastSettingsChanged(updated);
     return updated;
   });
   ipcMain.handle('window:hide', () => {
@@ -280,6 +419,25 @@ function registerIPC() {
   });
   ipcMain.handle('settings:open', () => openSettings());
   ipcMain.handle('help:open', () => openHelp());
+
+  ipcMain.handle('obsidian:chooseNote', async () => {
+    const options: Electron.OpenDialogOptions = {
+      title: 'Connect to Obsidian',
+      properties: ['openFile'],
+      filters: [
+        { name: 'Markdown notes', extensions: ['md', 'markdown'] },
+        { name: 'All files', extensions: ['*'] }
+      ]
+    };
+    const result = popupWindow && !popupWindow.isDestroyed()
+      ? await dialog.showOpenDialog(popupWindow, options)
+      : await dialog.showOpenDialog(options);
+    if (result.canceled || result.filePaths.length === 0) return null;
+    return readObsidianNote(result.filePaths[0]);
+  });
+  ipcMain.handle('obsidian:readNote', (_e, notePath: string) => readObsidianNote(notePath));
+  ipcMain.handle('obsidian:writeNote', (_e, notePath: string, content: string) => writeObsidianNote(notePath, content));
+  ipcMain.handle('obsidian:watchNotes', (_e, paths: string[]) => updateObsidianWatchers(paths));
 
   ipcMain.handle('app:getVersion', () => app.getVersion());
   ipcMain.handle('update:getState', () => updateState);
@@ -386,6 +544,7 @@ app.on('window-all-closed', (e: Electron.Event) => {
 
 app.on('before-quit', () => {
   flushSettings();
+  updateObsidianWatchers([]);
   // Guard: when a second instance loses the single-instance lock it calls
   // app.quit() before whenReady fires, and globalShortcut throws if used
   // before the app is ready.

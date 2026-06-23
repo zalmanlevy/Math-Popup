@@ -13,12 +13,27 @@ export interface Page {
   content: string;
   mode: Mode;              // legacy per-page mode; kept for migration + as the seed for lineModes
   lineModes?: Mode[];      // per-line mode, parallel to content's lines ('text' by default)
+  obsidianPath?: string;   // absolute path to a linked Obsidian/Markdown note
+}
+
+export interface ObsidianRecentNote {
+  path: string;
+  title: string;
+  lastOpenedAt: number;
+}
+
+export interface WindowBounds {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
 }
 
 export interface Settings {
   mode: Mode;                     // 'math' = full evaluator + gutters; 'text' = plain notepad
   launchAtStartup: boolean;       // start with Windows; opens hidden in the tray
   showTaskbarIcon: boolean;       // show the window in the Windows taskbar (so it can be pinned); off = tray-only
+  advancedMode: boolean;          // enables optional power-user integrations such as Obsidian note linking
   tabBarOpen: boolean;            // whether the tab bar is expanded (remembered across launches)
   suffixes: Suffix[];
   autoFormatNumbers: boolean;     // insert commas on space/operator
@@ -29,9 +44,11 @@ export interface Settings {
   theme: ThemePref;               // 'system' follows OS, otherwise forced
   zoom: number;                   // current popup zoom factor (1.0 = 100%)
   zoomDefault: number;            // user's preferred default; Ctrl+0 returns here
+  windowBounds?: WindowBounds;
   pages?: Page[];
   activePageId?: string;
   closedPages?: Page[];
+  obsidianRecentNotes?: ObsidianRecentNote[];
 }
 
 export const ZOOM_MIN = 0.5;
@@ -42,6 +59,7 @@ export const DEFAULT_SETTINGS: Settings = {
   mode: 'math',
   launchAtStartup: true,
   showTaskbarIcon: false,
+  advancedMode: false,
   tabBarOpen: false,
   suffixes: [
     { symbol: 'k', multiplier: 1_000, caseSensitive: false },
@@ -56,5 +74,6 @@ export const DEFAULT_SETTINGS: Settings = {
   alwaysOnTop: false,
   theme: 'system',
   zoom: 1.0,
-  zoomDefault: 1.0
+  zoomDefault: 1.0,
+  obsidianRecentNotes: []
 };
