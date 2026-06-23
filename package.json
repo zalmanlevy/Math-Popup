@@ -12,7 +12,8 @@
     "dev": "node build/dev.mjs",
     "dist": "npm run build && electron-builder",
     "dist:portable": "npm run build && electron-builder --win portable",
-    "dist:installer": "npm run build && electron-builder --win nsis"
+    "dist:installer": "npm run build && electron-builder --win nsis",
+    "build:web": "node build/build-web.mjs"
   },
   "dependencies": {
     "electron-updater": "^6.8.3",
