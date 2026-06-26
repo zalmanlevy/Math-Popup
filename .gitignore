@@ -5,3 +5,6 @@ release/
 web-dist/
 .DS_Store
 *.log
+
+# Local Claude Code preview-server config (machine-specific dev tooling)
+.claude/launch.json
