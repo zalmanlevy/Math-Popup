@@ -14,6 +14,7 @@ export interface Page {
   mode: Mode;              // legacy per-page mode; kept for migration + as the seed for lineModes
   lineModes?: Mode[];      // per-line mode, parallel to content's lines ('text' by default)
   obsidianPath?: string;   // absolute path to a linked Obsidian/Markdown note
+  archived?: boolean;      // true = lives in the Archive section; when also open it renders tinted
 }
 
 export interface ObsidianRecentNote {
@@ -47,7 +48,8 @@ export interface Settings {
   windowBounds?: WindowBounds;
   pages?: Page[];
   activePageId?: string;
-  closedPages?: Page[];
+  closedPages?: Page[];            // recently-closed tabs (auto-pruned history)
+  archivedPages?: Page[];          // tabs stowed in the Archive section (not currently open)
   obsidianRecentNotes?: ObsidianRecentNote[];
 }
 

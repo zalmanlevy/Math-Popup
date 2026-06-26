@@ -403,6 +403,19 @@ body {
 .tab-chip.active .tab-chip-close { color: var(--error); }
 .tab-chip.active .tab-chip-close:hover { background: var(--error-soft); color: var(--error); }
 
+/* Archived tab (opened from the Archive section): just a very soft warm wash so
+   it reads as "stowed/hidden", not an alert. Letters keep the regular tab colors
+   (text-soft / hover text / accent when active) — only the background hints at
+   archived. Built from --string (warm amber) so it tracks light/dark themes. */
+.tab-chip.archived { background: color-mix(in srgb, var(--string) 7%, transparent); }
+.tab-chip.archived:hover { background: color-mix(in srgb, var(--string) 11%, transparent); }
+.tab-chip.archived.active { background: color-mix(in srgb, var(--string) 14%, transparent); }
+/* Active archived tab: tint its corner "ears" to match (override --accent-soft). */
+.tab-strip .tab-chip.archived.active::before,
+.tab-strip .tab-chip.archived.active::after {
+  background: color-mix(in srgb, var(--string) 14%, transparent);
+}
+
 /* overflow chevron + "+" new-tab button — trail the last tab, always visible */
 .tab-overflow-btn,
 .tab-bar-add {
@@ -1278,6 +1291,38 @@ body {
   font-size: 10px;
   margin-left: 6px;
 }
+
+/* ---------- Archive section popup rows ---------- */
+.vars-popup .archive-row { gap: 6px; }
+.vars-popup .archive-row .archive-name {
+  color: var(--text);   /* regular text — archive = hidden, not an alert */
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.archive-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  flex: 0 0 auto;
+}
+.archive-row-restore,
+.archive-row-x {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  border-radius: 4px;
+  font-size: 13px;
+  line-height: 1;
+  cursor: pointer;
+  color: var(--text-faint);
+  transition: background 100ms ease, color 100ms ease;
+}
+.archive-row-restore:hover { background: var(--accent-soft); color: var(--accent); }
+.archive-row-x:hover { background: var(--error-soft); color: var(--error); }
 
 /* ---------- hover tooltip (custom, used for reserved-error rows) ---------- */
 .hover-tooltip {

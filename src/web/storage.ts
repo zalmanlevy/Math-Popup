@@ -70,6 +70,7 @@ function normalize(s: Settings): Settings {
     s.activePageId = s.pages[0].id;
   }
   if (!Array.isArray(s.closedPages)) s.closedPages = [];
+  if (!Array.isArray(s.archivedPages)) s.archivedPages = [];
   if (!Array.isArray(s.obsidianRecentNotes)) s.obsidianRecentNotes = [];
   for (const p of s.pages) {
     if (!Array.isArray(p.lineModes)) {

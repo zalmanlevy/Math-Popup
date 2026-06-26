@@ -279,6 +279,10 @@ Object.defineProperties(ed, {
 
 let settings: Settings;
 let closedPages: Page[] = [];
+// Tabs stowed in the Archive section (not currently open). An archived page that
+// the user opens moves back into `pages` (kept `archived: true` so it renders
+// tinted) and out of this list; closing it returns it here.
+let archivedPages: Page[] = [];
 let pages: Page[] = [];
 let activePageId: string = '';
 // True immediately after a tab is closed (cleared on any edit/navigation) so
@@ -319,6 +323,8 @@ const overflowBtn = document.getElementById('tab-overflow-btn') as HTMLButtonEle
 const overflowPopup = document.getElementById('tab-overflow-popup') as HTMLDivElement;
 const contextMenu = document.getElementById('tab-context-menu') as HTMLDivElement;
 const archivePopup = document.getElementById('archive-popup') as HTMLDivElement;
+const archiveSectionBtn = document.getElementById('archive-section-btn') as HTMLButtonElement;
+const archiveSectionPopup = document.getElementById('archive-section-popup') as HTMLDivElement;
 
 const COPY_ICON_HTML = `<span class="copy-icon"><svg class="copy-svg" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="0.75" width="7.25" height="7.25" rx="1.25"/><rect x="0.75" y="4" width="7.25" height="7.25" rx="1.25"/></svg></span>`;
 const COPIED_ICON_HTML = `<svg class="copy-svg" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 6l3 3.5 5-7"/></svg>`;
@@ -331,6 +337,7 @@ async function init() {
   settings = await window.mathPopup.getSettings();
   pages = settings.pages || [];
   closedPages = settings.closedPages || [];
+  archivedPages = settings.archivedPages || [];
   activePageId = settings.activePageId || '';
   if (pages.length === 0) {
     const id = Date.now().toString();
@@ -579,6 +586,13 @@ function bindEvents() {
         !overflowPopup.contains(t) && !overflowBtn.contains(t) && !contextMenu.contains(t)) {
       hideOverflowPopup();
     }
+    // Archive section popup: dismiss on a true outside click. Clicks on its own
+    // rows, its right-click menu, or the folder button keep it open (those drive
+    // its own actions); the contextMenu exclusion lets you use the row menu.
+    if (!archiveSectionPopup.hidden &&
+        !archiveSectionPopup.contains(t) && !archiveSectionBtn.contains(t) && !contextMenu.contains(t)) {
+      hideArchiveSectionPopup();
+    }
   });
   // Escape closes (in priority) the right-click menu, reorder mode, then the
   // dropdown — before the editor's Escape hides the whole window. Capture phase
@@ -590,6 +604,7 @@ function bindEvents() {
     else if (!contextMenu.hidden) hideTabContextMenu();
     else if (reorderMode) exitReorderMode(false);
     else if (!overflowPopup.hidden) hideOverflowPopup();
+    else if (!archiveSectionPopup.hidden) hideArchiveSectionPopup();
     else handled = false;
     if (handled) { e.preventDefault(); e.stopPropagation(); }
   }, true);
@@ -602,6 +617,13 @@ function bindEvents() {
   archiveBtn.addEventListener('click', showArchivePopup);
   archivePopup.addEventListener('mouseenter', cancelHideArchivePopup);
   archivePopup.addEventListener('mouseleave', scheduleHideArchivePopup);
+
+  // Archive section (📁) — same hover-intent open delay as the buttons above.
+  archiveSectionBtn.addEventListener('mouseenter', scheduleShowArchiveSectionPopup);
+  archiveSectionBtn.addEventListener('mouseleave', () => { cancelShowArchiveSectionPopup(); scheduleHideArchiveSectionPopup(); });
+  archiveSectionBtn.addEventListener('click', showArchiveSectionPopup);
+  archiveSectionPopup.addEventListener('mouseenter', cancelHideArchiveSectionPopup);
+  archiveSectionPopup.addEventListener('mouseleave', scheduleHideArchiveSectionPopup);
 
   // Variables popup
   varsBtn.addEventListener('mouseenter', scheduleShowVarsPopup);
@@ -621,6 +643,9 @@ function bindEvents() {
   window.addEventListener('focus', async () => {
     settings = await window.mathPopup.getSettings();
     pages = settings.pages || [];
+    // Keep the archive list in step with the reloaded pages — otherwise a focus
+    // refresh could leave a stale in-memory archive that desyncs from disk.
+    archivedPages = settings.archivedPages || [];
     if (!pages.find(p => p.id === activePageId) && pages.length > 0) {
       activePageId = settings.activePageId || pages[0].id;
       const activePage = pages.find(p => p.id === activePageId) || pages[0];
@@ -767,7 +792,7 @@ function toggleLineMode(i: number) {
   lineModes[i] = lineModeAt(i) === 'math' ? 'text' : 'math';
   const activePage = pages.find(p => p.id === activePageId);
   if (activePage) activePage.lineModes = [...lineModes];
-  window.mathPopup.setSettings({ pages, activePageId, closedPages });
+  saveTabs();
   render();
   editor.focus();
 }
@@ -781,7 +806,7 @@ function setLinesMode(startLine: number, endLine: number, mode: Mode) {
   }
   const activePage = pages.find(p => p.id === activePageId);
   if (activePage) activePage.lineModes = [...lineModes];
-  window.mathPopup.setSettings({ pages, activePageId, closedPages });
+  saveTabs();
   render();
   editor.focus();
 }
@@ -1236,7 +1261,7 @@ function handleObsidianFileChanged(note: ObsidianFileChange) {
   const currentText = page.id === activePageId ? editor.value : page.content;
   if (currentText === note.content) return;
   applyObsidianContent(page, note.content);
-  window.mathPopup.setSettings({ pages, activePageId, closedPages });
+  saveTabs();
   flashStatus('Updated from Obsidian');
 }
 
@@ -1285,12 +1310,7 @@ async function connectPageToObsidian(pageId: string) {
       editor.focus();
     }
 
-    window.mathPopup.setSettings({
-      pages,
-      activePageId,
-      closedPages,
-      obsidianRecentNotes: settings.obsidianRecentNotes
-    });
+    saveTabs({ obsidianRecentNotes: settings.obsidianRecentNotes });
     syncObsidianWatchers();
     updatePageIndicator();
     flashStatus(backup ? `Connected to Obsidian; saved previous content as ${backup.title}` : 'Connected to Obsidian');
@@ -1330,12 +1350,7 @@ async function openObsidianNote(notePath: string) {
     previousText = editor.value;
     loadPageModes(page);
     rememberObsidianNote(note);
-    window.mathPopup.setSettings({
-      pages,
-      activePageId,
-      closedPages,
-      obsidianRecentNotes: settings.obsidianRecentNotes
-    });
+    saveTabs({ obsidianRecentNotes: settings.obsidianRecentNotes });
     syncObsidianWatchers();
     updatePageIndicator();
     render();
@@ -1346,12 +1361,20 @@ async function openObsidianNote(notePath: string) {
   }
 }
 
+// Persist all tab state at once. Centralized so every tab mutation keeps the
+// open pages, active id, recently-closed history, AND the archive list in sync
+// on disk — forgetting `archivedPages` in any one call site would silently drop
+// archived tabs on the next load.
+function saveTabs(extra?: Partial<Settings>) {
+  window.mathPopup.setSettings({ pages, activePageId, closedPages, archivedPages, ...extra });
+}
+
 function scheduleSave() {
   if (saveTimer) window.clearTimeout(saveTimer);
   saveTimer = window.setTimeout(() => {
     const activePage = pages.find(p => p.id === activePageId);
     if (activePage) { activePage.content = editor.value; activePage.lineModes = [...lineModes]; }
-    window.mathPopup.setSettings({ pages, activePageId });
+    saveTabs();
   }, 250);
   if (!applyingObsidianChange) {
     queueObsidianSave(pages.find(p => p.id === activePageId), editor.value);
@@ -1642,7 +1665,7 @@ function commitReorderFromList() {
   ids.forEach((id) => { const p = pages.find(pp => pp.id === id); if (p) reordered.push(p); });
   if (reordered.length === pages.length) {
     pages.splice(0, pages.length, ...reordered);
-    window.mathPopup.setSettings({ pages, activePageId, closedPages });
+    saveTabs();
   }
 }
 
@@ -1654,7 +1677,7 @@ function commitTabOrderFromDom() {
   ids.forEach((id) => { const p = pages.find(pp => pp.id === id); if (p) reordered.push(p); });
   if (reordered.length === pages.length) {
     pages.splice(0, pages.length, ...reordered);
-    window.mathPopup.setSettings({ pages, activePageId, closedPages });
+    saveTabs();
   }
   renderTabBar();
 }
@@ -1679,11 +1702,287 @@ function scheduleHideArchivePopup() { archiveHoverTimer = window.setTimeout(hide
 function cancelHideArchivePopup() { if (archiveHoverTimer) window.clearTimeout(archiveHoverTimer); }
 function hideArchivePopup() { archivePopup.hidden = true; }
 
+// ---- Archive section (folder button): a durable home for tabs you stow away ----
+// Distinct from "Recently Closed" (🕒) above: closing a tab there is auto-pruned
+// history; archiving keeps a tab indefinitely. Same hover-intent open delay.
+let archiveSectionHoverTimer: number | null = null;
+let archiveSectionShowTimer: number | null = null;
+function showArchiveSectionPopup() {
+  cancelShowArchiveSectionPopup();
+  if (archiveSectionHoverTimer) window.clearTimeout(archiveSectionHoverTimer);
+  renderArchiveSectionMenu();
+  archiveSectionPopup.hidden = false;
+  const rect = archiveSectionBtn.getBoundingClientRect();
+  archiveSectionPopup.style.top = `${rect.bottom + 4}px`;
+  const left = Math.max(8, Math.min(rect.left, window.innerWidth - archiveSectionPopup.offsetWidth - 8));
+  archiveSectionPopup.style.left = `${left}px`;
+}
+function scheduleShowArchiveSectionPopup() {
+  cancelShowArchiveSectionPopup();
+  archiveSectionShowTimer = window.setTimeout(showArchiveSectionPopup, HOVER_INTENT_MS);
+}
+function cancelShowArchiveSectionPopup() {
+  if (archiveSectionShowTimer) { window.clearTimeout(archiveSectionShowTimer); archiveSectionShowTimer = null; }
+}
+function scheduleHideArchiveSectionPopup() { archiveSectionHoverTimer = window.setTimeout(maybeHideArchiveSectionPopup, 150); }
+function cancelHideArchiveSectionPopup() { if (archiveSectionHoverTimer) window.clearTimeout(archiveSectionHoverTimer); }
+// Keep the popup up while its right-click menu is open, or it gets orphaned when
+// the cursor moves off the popup onto the menu. Dismissal then falls to the menu
+// action or the outside-click handler.
+function maybeHideArchiveSectionPopup() {
+  if (!contextMenu.hidden) return;
+  hideArchiveSectionPopup();
+}
+function hideArchiveSectionPopup() { archiveSectionPopup.hidden = true; }
+
+// Render the list of stowed archived tabs. Left-click a row opens it (tinted);
+// the ↺ restores it to a normal tab; the × removes it from the archive (into
+// Recently Closed); right-click offers the same as a menu.
+function renderArchiveSectionMenu() {
+  archiveSectionPopup.innerHTML = '';
+  if (archivedPages.length === 0) {
+    archiveSectionPopup.innerHTML = `<div class="vars-empty">No archived tabs</div>`;
+    return;
+  }
+  archivedPages.forEach((page) => {
+    const row = document.createElement('div');
+    row.className = 'vars-row archive-row';
+    row.dataset.pageId = page.id;
+    row.title = page.title || 'Tab';
+    row.onclick = (e) => {
+      const t = e.target as HTMLElement;
+      if (t.closest('.archive-actions') || t.tagName === 'INPUT') return;  // action btn / inline rename
+      hideArchiveSectionPopup();
+      openArchivedTab(page.id);
+    };
+    row.oncontextmenu = (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      cancelHideArchiveSectionPopup();
+      showArchiveRowContextMenu(page.id, e.clientX, e.clientY);
+    };
+
+    const titleSpan = document.createElement('span');
+    titleSpan.className = 'vars-name archive-name';
+    titleSpan.textContent = page.title || 'Tab';
+
+    const actions = document.createElement('span');
+    actions.className = 'archive-actions';
+    const restoreBtn = document.createElement('span');
+    restoreBtn.className = 'archive-row-restore';
+    restoreBtn.textContent = '↺';
+    restoreBtn.title = 'Restore to tabs';
+    restoreBtn.onclick = (e) => { e.stopPropagation(); restorePage(page.id); };
+    const xBtn = document.createElement('span');
+    xBtn.className = 'archive-row-x';
+    xBtn.textContent = '×';
+    xBtn.title = 'Remove from archive';
+    xBtn.onclick = (e) => { e.stopPropagation(); removeFromArchive(page.id); };
+    actions.appendChild(restoreBtn);
+    actions.appendChild(xBtn);
+
+    row.appendChild(titleSpan);
+    row.appendChild(actions);
+    archiveSectionPopup.appendChild(row);
+  });
+}
+
+// Right-click menu for a stowed archive row (reuses the shared context menu).
+function showArchiveRowContextMenu(pageId: string, x: number, y: number) {
+  contextMenu.innerHTML = '';
+  const addItem = (label: string, key: string, danger: boolean, onPick: () => void) => {
+    const item = document.createElement('div');
+    item.className = 'ctx-item' + (danger ? ' danger' : '');
+    const text = document.createElement('span');
+    text.textContent = label;
+    item.appendChild(text);
+    if (key) {
+      const k = document.createElement('span');
+      k.className = 'ctx-key';
+      k.textContent = key;
+      item.appendChild(k);
+    }
+    item.onclick = () => { hideTabContextMenu(); onPick(); };
+    contextMenu.appendChild(item);
+  };
+  addItem('Open', '', false, () => { hideArchiveSectionPopup(); openArchivedTab(pageId); });
+  addItem('Restore to tabs', '', false, () => { hideArchiveSectionPopup(); restorePage(pageId); });
+  // Rename in place — no need to yank the tab open just to retitle it.
+  addItem('Rename', 'Ctrl+L', false, () => startArchiveRename(pageId));
+  // Reorder operates on the open bar, so bring this tab in first (else the tab
+  // the user clicked wouldn't even appear in the reorder list).
+  addItem('Reorder tabs', '', false, () => { hideArchiveSectionPopup(); openArchivedTab(pageId); enterReorderMode(); });
+  addItem('Close tab', '', true, () => removeFromArchive(pageId));
+  placeContextMenuAt(x, y);
+}
+
+// Inline-rename a stowed archive row without opening it (mirrors startRename's
+// input behavior, but writes straight into the archivedPages entry).
+function startArchiveRename(pageId: string) {
+  if (archiveSectionPopup.hidden) showArchiveSectionPopup();
+  cancelHideArchiveSectionPopup();
+  const page = archivedPages.find(p => p.id === pageId);
+  const row = archiveSectionPopup.querySelector(`.archive-row[data-page-id="${pageId}"]`) as HTMLElement | null;
+  const nameSpan = row?.querySelector('.archive-name') as HTMLElement | null;
+  if (!page || !row || !nameSpan) return;
+
+  const input = document.createElement('input');
+  input.type = 'text';
+  input.className = 'tab-rename-input';
+  input.maxLength = 15;
+  input.value = page.title;
+
+  const save = () => {
+    const val = input.value.trim();
+    if (val) { page.title = val; saveTabs(); }
+    renderArchiveSectionMenu();
+  };
+  input.onkeydown = (e) => {
+    if (e.key === 'Enter') { e.preventDefault(); save(); }
+    else if (e.key === 'Escape') { e.preventDefault(); renderArchiveSectionMenu(); }
+  };
+  input.onblur = save;
+  input.onclick = (e) => e.stopPropagation();   // don't trigger the row's open-on-click
+
+  row.replaceChild(input, nameSpan);
+  input.focus();
+  input.select();
+}
+
+// Move an OPEN page into the Archive section. Used by the "Archive" menu action
+// and by closing an already-archived open tab (which just returns it here).
+// Mirrors closeTab's "pick a new active tab / never leave zero tabs" handling.
+function stowToArchive(pageId: string) {
+  const index = pages.findIndex(p => p.id === pageId);
+  if (index === -1) return;
+  // A pending drag-reorder draft references the current `pages`; mutating the
+  // array behind it would commit a mismatched order. Drop the draft first.
+  if (reorderMode) exitReorderMode(false);
+  justClosedTab = false;
+  const page = pages[index];
+  // Persist live editor content of the active page first (it may be this page,
+  // or — when archiving a background tab — a different one we mustn't clobber).
+  const active = pages.find(p => p.id === activePageId);
+  if (active) { active.content = editor.value; active.lineModes = [...lineModes]; }
+  if (pageId === activePageId) queueObsidianSave(page, editor.value, true);
+
+  page.archived = true;
+  archivedPages = archivedPages.filter(p => p.id !== page.id);
+  archivedPages.unshift(page);
+  pages.splice(index, 1);
+
+  if (pages.length === 0) {
+    const newId = Date.now().toString();
+    pages.push({ id: newId, title: 'Page 1', content: '', mode: 'text', lineModes: ['text'] });
+    activePageId = newId;
+  } else if (pageId === activePageId) {
+    const nextIndex = Math.min(index, pages.length - 1);
+    activePageId = pages[nextIndex].id;
+  }
+
+  const next = pages.find(p => p.id === activePageId)!;
+  editor.value = next.content;
+  previousText = editor.value;
+  loadPageModes(next);
+  saveTabs();
+  syncObsidianWatchers();
+  updatePageIndicator();
+  render();
+  editor.focus();
+  refreshTabBar();
+  if (!archiveSectionPopup.hidden) renderArchiveSectionMenu();
+}
+
+// Open a stowed archived tab into the bar. It stays archived (renders tinted) and
+// leaves the archive list until closed again.
+function openArchivedTab(pageId: string) {
+  if (reorderMode) exitReorderMode(false);   // don't commit a stale reorder draft
+  const idx = archivedPages.findIndex(p => p.id === pageId);
+  if (idx === -1) {
+    // Already open (e.g. acted on a stale popup) — just focus it.
+    if (pages.some(p => p.id === pageId)) switchTab(pageId);
+    return;
+  }
+  justClosedTab = false;
+  const page = archivedPages.splice(idx, 1)[0];
+  page.archived = true;
+  const current = pages.find(p => p.id === activePageId);
+  if (current) { current.content = editor.value; current.lineModes = [...lineModes]; queueObsidianSave(current, editor.value, true); }
+
+  pages.push(page);
+  activePageId = page.id;
+  editor.value = page.content;
+  previousText = editor.value;
+  loadPageModes(page);
+  saveTabs();
+  syncObsidianWatchers();
+  updatePageIndicator();
+  render();
+  editor.focus();
+  if (!tabBar.classList.contains('open')) showTabBar(); else refreshTabBar();
+  if (!archiveSectionPopup.hidden) renderArchiveSectionMenu();
+}
+
+// Un-archive a page (clears the tinted state). If it's open, it simply becomes a
+// normal tab in place; if it's stowed, it's brought into the bar and activated.
+function restorePage(pageId: string) {
+  if (reorderMode) exitReorderMode(false);   // don't commit a stale reorder draft
+  justClosedTab = false;
+  const open = pages.find(p => p.id === pageId);
+  if (open) {
+    open.archived = false;
+    saveTabs();
+    refreshTabBar();
+    if (!archiveSectionPopup.hidden) renderArchiveSectionMenu();
+    return;
+  }
+  const idx = archivedPages.findIndex(p => p.id === pageId);
+  if (idx === -1) return;
+  const page = archivedPages.splice(idx, 1)[0];
+  page.archived = false;
+  const current = pages.find(p => p.id === activePageId);
+  if (current) { current.content = editor.value; current.lineModes = [...lineModes]; queueObsidianSave(current, editor.value, true); }
+
+  pages.push(page);
+  activePageId = page.id;
+  editor.value = page.content;
+  previousText = editor.value;
+  loadPageModes(page);
+  saveTabs();
+  syncObsidianWatchers();
+  updatePageIndicator();
+  render();
+  editor.focus();
+  if (!tabBar.classList.contains('open')) showTabBar(); else refreshTabBar();
+  if (!archiveSectionPopup.hidden) renderArchiveSectionMenu();
+}
+
+// Drop a stowed tab out of the archive entirely — it lands in Recently Closed so
+// it's still recoverable, matching what "Close tab" does for an open tab.
+function removeFromArchive(pageId: string) {
+  const idx = archivedPages.findIndex(p => p.id === pageId);
+  if (idx === -1) return;
+  // Clear the one-shot "Ctrl+Z restores the just-closed tab" flag: this unshifts
+  // onto closedPages, so a stale flag would make Ctrl+Z restore THIS page instead.
+  justClosedTab = false;
+  // Persist the live active-page content before saveTabs writes `pages`.
+  const active = pages.find(p => p.id === activePageId);
+  if (active) { active.content = editor.value; active.lineModes = [...lineModes]; }
+  const page = archivedPages.splice(idx, 1)[0];
+  page.archived = false;
+  closedPages.unshift(page);
+  if (closedPages.length > 10) closedPages.pop();
+  saveTabs();
+  renderArchiveSectionMenu();
+}
+
 function renderTabBar() {
   tabStrip.innerHTML = '';
   pages.forEach((page, index) => {
     const chip = document.createElement('div');
-    chip.className = 'tab-chip' + (page.id === activePageId ? ' active' : '');
+    chip.className = 'tab-chip'
+      + (page.id === activePageId ? ' active' : '')
+      + (page.archived ? ' archived' : '');   // soft yellow-brown tint = archived
     chip.dataset.pageId = page.id;
     chip.draggable = true;
     const label = page.title || `Page ${index + 1}`;
@@ -1791,7 +2090,7 @@ function startRename(pageId: string) {
     const val = input.value.trim();
     if (val) {
       page.title = val;
-      window.mathPopup.setSettings({ pages, activePageId, closedPages });
+      saveTabs();
       updatePageIndicator();
     }
     renderTabBar();
@@ -1831,12 +2130,17 @@ function showTabContextMenu(pageId: string | null, x: number, y: number) {
     contextMenu.appendChild(item);
   };
   if (pageId) {
+    const page = pages.find(p => p.id === pageId);
     addItem('Rename', 'Ctrl+L', false, () => startRename(pageId));
     if (settings?.advancedMode) {
-      const page = pages.find(p => p.id === pageId);
       addItem(page?.obsidianPath ? 'Reconnect Obsidian' : 'Connect to Obsidian', '', false, () => {
         connectPageToObsidian(pageId);
       });
+    }
+    if (page?.archived) {
+      addItem('Restore to tabs', '', false, () => restorePage(pageId));
+    } else {
+      addItem('Archive', '', false, () => { stowToArchive(pageId); refreshOverflowPopup(); });
     }
     addItem('Close tab', 'Ctrl+W', true, () => { closeTab(pageId); refreshOverflowPopup(); });
   }
@@ -1965,7 +2269,7 @@ function switchTab(id: string) {
   previousText = editor.value;
 
   loadPageModes(next);
-  window.mathPopup.setSettings({ pages, activePageId, closedPages });
+  saveTabs();
 
   updatePageIndicator();
   render();
@@ -1991,7 +2295,7 @@ function addTab() {
   editor.value = '';
   previousText = '';
   loadPageModes(page);
-  window.mathPopup.setSettings({ pages, activePageId, closedPages });
+  saveTabs();
   
   updatePageIndicator();
   render();
@@ -2001,7 +2305,11 @@ function addTab() {
 function closeTab(id: string) {
   const index = pages.findIndex(p => p.id === id);
   if (index === -1) return;
-  
+
+  // Closing an archived (tinted) tab returns it to the Archive section rather
+  // than Recently Closed — that's its durable home.
+  if (pages[index].archived) { stowToArchive(id); return; }
+
   const current = pages[index];
   if (id === activePageId) {
     current.content = editor.value;
@@ -2026,7 +2334,7 @@ function closeTab(id: string) {
   previousText = editor.value;
 
   loadPageModes(next);
-  window.mathPopup.setSettings({ pages, activePageId, closedPages });
+  saveTabs();
   syncObsidianWatchers();
 
   updatePageIndicator();
@@ -2053,7 +2361,7 @@ function restoreTab(closedIndex: number) {
   previousText = editor.value;
 
   loadPageModes(page);
-  window.mathPopup.setSettings({ pages, activePageId, closedPages });
+  saveTabs();
   syncObsidianWatchers();
   
   updatePageIndicator();
@@ -2064,12 +2372,7 @@ function restoreTab(closedIndex: number) {
       if (activePageId !== page.id) return;
       applyObsidianContent(page, note.content);
       rememberObsidianNote(note);
-      window.mathPopup.setSettings({
-        pages,
-        activePageId,
-        closedPages,
-        obsidianRecentNotes: settings.obsidianRecentNotes
-      });
+      saveTabs({ obsidianRecentNotes: settings.obsidianRecentNotes });
       updatePageIndicator();
     }).catch(err => {
       flashStatus(err instanceof Error ? err.message : 'Could not refresh Obsidian note', true);

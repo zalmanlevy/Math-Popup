@@ -23,6 +23,9 @@ function migrateSettings(settings: Settings): Settings {
   if (!settings.closedPages) {
     settings.closedPages = [];
   }
+  if (!Array.isArray(settings.archivedPages)) {
+    settings.archivedPages = [];
+  }
   if (!Array.isArray(settings.obsidianRecentNotes)) {
     settings.obsidianRecentNotes = [];
   }
