@@ -208,7 +208,12 @@ function tokenizeMath(line: string, r: LineResult | undefined, ctx: HighlightCon
         const isActive = activeToken?.type === 'lref' && activeToken.line === lineNum;
         const cls = isActive ? 'tk-lref tk-hl-ref' : 'tk-lref';
         out.push(`<span class="${cls}">${ident}</span>`);
-      } else if (/^bps?$/i.test(ident)) {
+      } else if (/^bps?$/i.test(ident) && /[0-9.]\s*$/.test(line.slice(0, m.index))) {
+        // `bp`/`bps` is the basis-points unit ONLY when it directly follows a
+        // number (e.g. `50bps`, `50 bps`) — that mirrors the evaluator, which
+        // converts to basis points only when a number precedes. A standalone `bp`
+        // (e.g. `bp = 4`, `f + bp`) is a normal identifier, so fall through to the
+        // variable logic below and let a defined `bp` render in variable blue.
         out.push(`<span class="tk-bps">${ident}</span>`);
       } else if (isExcelFunctionName(ident) && isFollowedByParen(line, tokenRe.lastIndex)) {
         out.push(`<span class="tk-excel">${escapeHtml(ident)}</span>`);

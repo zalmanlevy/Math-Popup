@@ -594,6 +594,21 @@ function computeExpression(
     s = s.replace(/"[^"]*"|\b([A-Za-z_][A-Za-z0-9_]*)\b/g, (m, ident) =>
       ident !== undefined ? m.toLowerCase() : m);
 
+    // 4f. Implicit multiplication between a variable and an opening paren.
+    //     A user expects `bp (2)` to mean `bp * (2)`, like `2 (3)` means `2*3`.
+    //     But mathjs reads `name(...)` as a function CALL, and a name bound to a
+    //     number isn't callable — it throws "'bp' is not a function". So when an
+    //     identifier is a known numeric variable in scope, insert an explicit `*`
+    //     before the `(`. Real function calls (sqrt(4), sum(L1:L4), sin(x), …) are
+    //     left untouched because those names aren't variables in scope. Skip
+    //     content inside double-quoted strings so string args aren't rewritten.
+    s = s.replace(/"[^"]*"|([A-Za-z_][A-Za-z0-9_]*)\s*\(/g, (m, ident) => {
+      if (ident === undefined) return m; // quoted string — leave as-is
+      return Object.prototype.hasOwnProperty.call(ctx.scope, ident.toLowerCase())
+        ? `${ident} * (`
+        : m;
+    });
+
     // 5. Apply percentage / bps preprocessor.
     s = preprocessPercentages(s);
 
