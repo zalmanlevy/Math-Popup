@@ -3190,8 +3190,11 @@ function copyCurrentLineResult() {
     flashStatus('No result on this line', true);
     return;
   }
-  window.mathPopup.copyText(String(r.numeric));
-  flashStatus(`Copied ${r.display ?? r.numeric}`);
+  // A formatted line (`%%` / `..`) copies exactly what's shown; otherwise the raw
+  // value. Flash the SAME string we copied so the toast can't disagree with the clipboard.
+  const copied = r.displayFormat && r.display ? r.display : String(r.numeric);
+  window.mathPopup.copyText(copied);
+  flashStatus(`Copied ${copied}`);
 }
 
 function copyAsMarkdown() {
@@ -3326,7 +3329,11 @@ function buildVarCompCommands(): SlashCmd[] {
     if (r.stringValue !== undefined) {
       hint = r.stringValue;
     } else if (r.numeric !== undefined && isFinite(r.numeric)) {
-      hint = r.display ?? formatResult(r.numeric, settings.decimals);
+      // A `%%` line displays a percent but the ref inserts the RAW value, so preview
+      // the raw value (else the hint says "9%" while `L<n>*1000` resolves to 60).
+      hint = r.displayFormat?.percent
+        ? formatResult(r.numeric, settings.decimals)
+        : (r.display ?? formatResult(r.numeric, settings.decimals));
     }
     out.push({ insert: r.varName, label: r.varName, hint });
     seen.add(r.varName);
@@ -3344,7 +3351,8 @@ function buildLineRefCommands(): SlashCmd[] {
     out.push({
       insert: label,
       label,
-      hint: r.display ?? String(r.numeric)
+      // Percent lines insert the raw value, so preview that (not the "%") here.
+      hint: r.displayFormat?.percent ? formatResult(r.numeric, settings.decimals) : (r.display ?? String(r.numeric))
     });
   }
   return out;
@@ -4105,7 +4113,9 @@ function bindResultClicks() {
     if (!chip) return;
     const r = lastResults[i];
     if (!r || (r.numeric === undefined && r.stringValue === undefined)) return;
-    const val = r.stringValue ?? String(r.numeric);
+    const val = r.displayFormat && r.display
+      ? r.display                                   // copy exactly what's shown for %% / ..
+      : (r.stringValue ?? String(r.numeric));
     const display = r.display ?? val;
     chip.style.cursor = 'pointer';
     chip.addEventListener('click', () => {

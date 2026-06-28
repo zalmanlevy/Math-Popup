@@ -100,6 +100,9 @@ export interface LineResult {
   varName?: string;    // assignment target, if any
   stale?: boolean;     // true when display/numeric is the previous render's
                        //   value (e.g. user is mid-typing an incomplete expr)
+  displayFormat?: { percent: boolean; full: boolean };  // line-local result format
+                       //   from `%%` (percent) and/or `..` (full precision) markers —
+                       //   they compose; display-only, `numeric` stays the raw value
 }
 
 const HEADER_RE = /^(\s*)(#{1,6})\s+(.*)$/;
@@ -274,6 +277,7 @@ function evaluateOnePass(
           numeric: prev.numeric,
           stringValue: prev.stringValue,
           display: prev.display,
+          displayFormat: prev.displayFormat,
           error: undefined,
           stale: true,
           varName: prev.varName
@@ -299,7 +303,44 @@ function resultsConverged(a: LineResult[], b: LineResult[]): boolean {
   return true;
 }
 
+// Inline, display-only result-format markers, typed as a standalone token on the
+// line (NOT attached to a number, matching the user's mental model):
+//   `%%`  -> show the result as a percent (value × 100, with a "%")
+//   `..`  -> show the result at full precision (as if /no_dec_limit were on)
+// The marker is stripped before evaluation so it never changes the math, and the
+// stored `numeric` stays the raw value so L<n> references are unaffected.
+function splitDisplayFormat(raw: string): { expr: string; percent: boolean; full: boolean } {
+  // A `%%` / `..` marker is a whole-line display flag: a standalone (whitespace-
+  // delimited) marker ANYWHERE on the line formats that line's result — "show the
+  // result as a percent regardless of the actual math". Both markers are stripped
+  // out (so neither pollutes the expression) and they compose: `%% ..` = percent at
+  // full precision. Standalone `%%`/`..` never occur in valid math, so this is safe.
+  // Fresh, non-/g-state regexes; `..` is stripped after `%%` (doesn't affect its matches).
+  let percent = false, full = false;
+  let expr = raw.replace(/(^|\s)%%(?=\s|$)/g, (_m, lead: string) => { percent = true; return lead; });
+  expr = expr.replace(/(^|\s)\.\.(?=\s|$)/g, (_m, lead: string) => { full = true; return lead; });
+  return { expr, percent, full };
+}
+function applyDisplayFormat(r: LineResult, percent: boolean, full: boolean, decimals: number): void {
+  if (r.numeric === undefined || !isFinite(r.numeric)) return; // only numeric results format
+  r.displayFormat = { percent, full };
+  const dec = full ? Math.max(decimals, NO_DEC_LIMIT_CAP) : decimals;  // `..` = full precision
+  const value = percent ? r.numeric * 100 : r.numeric;                // `%%` = ×100 with a "%"
+  r.display = formatResult(value, dec) + (percent ? '%' : '');
+}
+
 function evaluateLine(raw: string, index: number, ctx: PreprocessCtx): LineResult {
+  // Peel off any `%%` / `..` display markers first, evaluate the cleaned text, then
+  // re-apply the original raw (so the editor/highlighter still show the markers) and
+  // the chosen result format(s) — which combine: `%% ..` = percent at full precision.
+  const { expr, percent, full } = splitDisplayFormat(raw);
+  const r = evaluateLineCore(expr, index, ctx);
+  if (expr !== raw) r.raw = raw;
+  if (percent || full) applyDisplayFormat(r, percent, full, ctx.decimals);
+  return r;
+}
+
+function evaluateLineCore(raw: string, index: number, ctx: PreprocessCtx): LineResult {
   const trimmed = raw.trim();
   if (trimmed === '') {
     return { index, kind: 'blank', raw, display: '' };
@@ -316,7 +357,7 @@ function evaluateLine(raw: string, index: number, ctx: PreprocessCtx): LineResul
   const blt = BULLET_RE.exec(raw);
   if (blt) {
     const content = blt[3];
-    const sub = evaluateLine(content, index, ctx);
+    const sub = evaluateLineCore(content, index, ctx);
     return { ...sub, kind: 'bullet', raw };
   }
 

@@ -15,6 +15,7 @@
     <a href="#overview">Overview</a>
     <a href="#window">Window controls</a>
     <a href="#tabs">Tabs</a>
+    <a href="#archive">Archived tabs</a>
     <a href="#modes">Math &amp; text lines</a>
     <a href="#numbers">Numbers &amp; formatting</a>
     <a href="#currency">Currency symbols</a>
@@ -29,6 +30,7 @@
     <a href="#lineranges">Line ranges (L1:L4)</a>
     <a href="#xoperator">x as multiplication</a>
     <a href="#percent">Percent &amp; basis points</a>
+    <a href="#resultformat">Show result as % / full precision</a>
     <a href="#excel">Excel-style formulas</a>
     <a href="#iffunction">IF, TRUE / FALSE</a>
     <a href="#equalsprefix">Excel = prefix</a>
@@ -64,6 +66,9 @@
           and add, rename, reorder, or close them. See <a href="#tabs">Tabs</a> below.</li>
         <li><strong>🕒 Recently Closed</strong> — reopen a tab you closed by
           mistake. Hover to see the list of recently closed notes.</li>
+        <li><strong>📁 Archive</strong> — a durable shelf for tabs you want out of
+          the way but not gone. Hover to see your archived tabs. See
+          <a href="#archive">Archived tabs</a> below.</li>
         <li><strong>Drag handle</strong> — click and drag anywhere in the empty
           part of the header to move the window.</li>
         <li><strong>📌 Pin</strong> — keep the window above other apps. Highlights when active.</li>
@@ -112,6 +117,33 @@
         press <kbd>Ctrl</kbd>+<kbd>Z</kbd> immediately after closing a tab to bring
         it back, or open the <strong>🕒 Recently Closed</strong> list in the
         header and pick one.</p>
+    </section>
+
+    <section id="archive">
+      <h2>Archived tabs</h2>
+      <p>Archiving is for tabs you want <em>out of the way but not gone</em> — a
+        durable shelf, separate from <a href="#tabs">Recently Closed</a> (which is
+        short-term history that gets pruned). Open it from the <strong>📁</strong>
+        button in the header — hover or click, with the same brief delay as the
+        other header popups.</p>
+      <ul>
+        <li><strong>Archive a tab</strong> — right-click it and choose
+          <em>Archive</em>. It leaves the tab bar and moves into the archive.</li>
+        <li><strong>Open an archived tab</strong> — click its row in the
+          <strong>📁</strong> list. It reopens in the bar with a
+          <strong>soft warm tint</strong> so you can tell it came from the
+          archive; it stays archived while open.</li>
+        <li><strong>Restore</strong> — the <strong>↺</strong> on a row (or
+          <em>Restore to tabs</em> from its right-click menu) turns it back into a
+          normal tab and drops the tint.</li>
+        <li><strong>Close an archived tab</strong> — the <strong>×</strong> on a
+          tinted tab sends it <em>back to the archive</em> (not Recently Closed).
+          The <strong>×</strong> on a row in the 📁 list removes it from the
+          archive entirely — into Recently Closed, so it's still recoverable.</li>
+        <li><strong>Rename / Reorder</strong> — both available from a row's
+          right-click menu (Rename edits the row in place).</li>
+      </ul>
+      <p>Archived tabs are remembered between launches, just like open tabs.</p>
     </section>
 
     <section id="modes">
@@ -397,6 +429,33 @@ AVERAGE(L1:L3)    → 20</code></pre>
         <li><code>1,000,000 + 25bps</code> → <code>1,002,500</code></li>
         <li><code>50bps</code> → <code>0.005</code></li>
       </ul>
+    </section>
+
+    <section id="resultformat">
+      <h2>Show result as % / full precision (<code>%%</code> &amp; <code>..</code>)</h2>
+      <p>Add a standalone marker anywhere on a math line to change how
+        <em>that line's result</em> is shown. The marker is a display flag only —
+        it's stripped before the math runs and never changes the value, so any
+        <a href="#linerefs">line references</a> or <a href="#variables">variables</a>
+        keep using the raw number.</p>
+      <ul>
+        <li><strong><code>%%</code></strong> — show the result as a
+          <strong>percent</strong> (×100 with a <code>%</code>), regardless of the
+          math: <code>9% - 3% %%</code> → <code>6%</code>;
+          <code>1/2 + 1 %%</code> → <code>150%</code>.</li>
+        <li><strong><code>..</code></strong> — show the result at <strong>full
+          precision</strong> (like <a href="#directives"><code>/no_dec_limit</code></a>,
+          but just for this one line): <code>1000 / 7 ..</code> →
+          <code>142.857143</code>.</li>
+        <li><strong>Combine them</strong> for a percent at full precision —
+          <code>1/7 %% ..</code> → <code>14.285714%</code> (vs <code>1/7 %%</code>
+          → <code>14.29%</code>). Order doesn't matter.</li>
+      </ul>
+      <p>Type the marker with a space before it (e.g. <code>… %%</code>) so it's
+        read as a flag rather than part of a number — <code>5%%</code> is not a
+        marker. It renders muted in the editor to show it isn't math. Copying a
+        <code>%%</code> result copies the percent you see; references still get the
+        raw value.</p>
     </section>
 
     <section id="excel">

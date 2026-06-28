@@ -184,17 +184,23 @@ function renderRefToken(rawToken: string, lineNum: number, lineResults: LineResu
 function tokenizeMath(line: string, r: LineResult | undefined, ctx: HighlightContext, activeToken?: ActiveToken | null): string {
   if (line.length === 0) return '';
   const out: string[] = [];
-  // Order matters: line range BEFORE plain L<n> ref.
-  const tokenRe = /(\s+)|(L\d+\s*:\s*L\d+)|([A-Za-z_][A-Za-z0-9_]*)|([0-9][0-9,]*(?:\.[0-9]+)?|\.[0-9]+)|(%)|(:)|([+\-*/^=])|(\()|(\))|(.)/gi;
+  // Order matters: the `%%` / `..` display-format marker BEFORE % and numbers, and
+  // the line range BEFORE plain L<n> ref. The marker pattern mirrors the evaluator's
+  // splitDisplayFormat: a standalone (whitespace-delimited) `%%`/`..` ANYWHERE on the
+  // line, so styling and evaluation agree on what counts as a marker.
+  const tokenRe = /(\s+)|((?<!\S)(?:%%|\.\.)(?=\s|$))|(L\d+\s*:\s*L\d+)|([A-Za-z_][A-Za-z0-9_]*)|([0-9][0-9,]*(?:\.[0-9]+)?|\.[0-9]+)|(%)|(:)|([+\-*/^=])|(\()|(\))|(.)/gi;
   let m: RegExpExecArray | null;
   while ((m = tokenRe.exec(line))) {
     if (m[1]) {
       out.push(escapeHtml(m[1]));
     } else if (m[2]) {
-      // L<a>:L<b> range
-      out.push(`<span class="tk-lrange">${escapeHtml(m[2])}</span>`);
+      // `%%` / `..` result-format marker — display-only, so style it muted.
+      out.push(`<span class="tk-fmt">${escapeHtml(m[2])}</span>`);
     } else if (m[3]) {
-      const ident = m[3];
+      // L<a>:L<b> range
+      out.push(`<span class="tk-lrange">${escapeHtml(m[3])}</span>`);
+    } else if (m[4]) {
+      const ident = m[4];
       const identLow = ident.toLowerCase();
       // Reserved-x error: render the bare `x` in the assignment with a
       // strong reserved-marker style instead of variable blue.
@@ -232,21 +238,21 @@ function tokenizeMath(line: string, r: LineResult | undefined, ctx: HighlightCon
         const cls = isActive ? 'tk-var tk-hl-ref' : 'tk-var';
         out.push(`<span class="${cls}">${ident}</span>`);
       }
-    } else if (m[4]) {
-      out.push(`<span class="tk-num">${m[4]}</span>`);
     } else if (m[5]) {
-      out.push(`<span class="tk-pct">%</span>`);
+      out.push(`<span class="tk-num">${m[5]}</span>`);
     } else if (m[6]) {
+      out.push(`<span class="tk-pct">%</span>`);
+    } else if (m[7]) {
       // Bare colon outside a range — just punctuation.
       out.push(`<span class="tk-op">:</span>`);
-    } else if (m[7]) {
-      out.push(`<span class="tk-op">${escapeHtml(m[7])}</span>`);
     } else if (m[8]) {
-      out.push(`<span class="tk-paren">(</span>`);
+      out.push(`<span class="tk-op">${escapeHtml(m[8])}</span>`);
     } else if (m[9]) {
-      out.push(`<span class="tk-paren">)</span>`);
+      out.push(`<span class="tk-paren">(</span>`);
     } else if (m[10]) {
-      const ch = m[10];
+      out.push(`<span class="tk-paren">)</span>`);
+    } else if (m[11]) {
+      const ch = m[11];
       if (CURRENCY_CHAR_RE.test(ch)) {
         out.push(`<span class="tk-currency">${escapeHtml(ch)}</span>`);
       } else {

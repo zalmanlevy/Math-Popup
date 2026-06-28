@@ -1046,6 +1046,8 @@ body {
 .tk-fn  { color: #7c3aed; }
 .tk-pct { color: var(--operator); }
 .tk-bps { color: var(--operator); }
+/* `%%` / `..` result-format marker — muted, since it's a display flag, not math. */
+.tk-fmt { color: var(--text-faint); font-weight: 600; }
 .tk-paren { color: var(--text-faint); }
 .tk-lref { color: #0ea5e9; font-weight: 500; }
 .tk-comment { color: var(--text-faint); font-style: italic; }
