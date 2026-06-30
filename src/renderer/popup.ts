@@ -3190,9 +3190,10 @@ function copyCurrentLineResult() {
     flashStatus('No result on this line', true);
     return;
   }
-  // A formatted line (`%%` / `..`) copies exactly what's shown; otherwise the raw
-  // value. Flash the SAME string we copied so the toast can't disagree with the clipboard.
-  const copied = r.displayFormat && r.display ? r.display : String(r.numeric);
+  // Copy exactly what's shown — the displayed result is already rounded to the
+  // line's decimal cap (default 2, more under /no_dec_limit), so we never copy the
+  // raw long float. Flash the SAME string so the toast matches the clipboard.
+  const copied = r.display ?? String(r.numeric);
   window.mathPopup.copyText(copied);
   flashStatus(`Copied ${copied}`);
 }
@@ -4113,10 +4114,10 @@ function bindResultClicks() {
     if (!chip) return;
     const r = lastResults[i];
     if (!r || (r.numeric === undefined && r.stringValue === undefined)) return;
-    const val = r.displayFormat && r.display
-      ? r.display                                   // copy exactly what's shown for %% / ..
-      : (r.stringValue ?? String(r.numeric));
-    const display = r.display ?? val;
+    // Copy exactly what's shown (already rounded to the line's decimal cap), not
+    // the raw long float.
+    const val = r.display ?? r.stringValue ?? String(r.numeric);
+    const display = val;
     chip.style.cursor = 'pointer';
     chip.addEventListener('click', () => {
       window.mathPopup.copyText(val);
@@ -4533,6 +4534,7 @@ editor.addEventListener('paste', (e) => {
   const t = (e.clipboardData?.getData('text/plain') ?? '').replace(/\r\n?/g, '\n');
   const s = Math.min(edCaretStart, edCaretEnd);
   const en = Math.max(edCaretStart, edCaretEnd);
+  const originalValue = edValue;   // snapshot before the DOM is rebuilt (edValue changes)
   captureForUndo();
   buildEditorDOM(edValue.slice(0, s) + t + edValue.slice(en));
   edSetSelection(s + t.length, s + t.length);
@@ -4542,8 +4544,23 @@ editor.addEventListener('paste', (e) => {
   // the pasted lines), then stamp the saved modes onto the pasted range.
   if (copiedLineModes && copiedLineModes.text === t && t.length > 0) {
     syncLineModes();
-    const startLine = edValue.slice(0, s).split('\n').length - 1;
+    const startLine = originalValue.slice(0, s).split('\n').length - 1;
+    // Did the line we pasted INTO already have its own content? If so, keep THAT
+    // line's mode (so copying a math result into a text note doesn't flip the note
+    // to math). Look at the original start line minus the replaced selection: the
+    // text before the caret, plus the surviving suffix if the selection stayed on
+    // that one line. A truly empty target line adopts the copied mode instead.
+    const lineStart = originalValue.lastIndexOf('\n', s - 1) + 1;
+    const prefix = originalValue.slice(lineStart, s);
+    const enLineStart = originalValue.lastIndexOf('\n', en - 1) + 1;
+    let suffix = '';
+    if (enLineStart === lineStart) {
+      const nl = originalValue.indexOf('\n', en);
+      suffix = originalValue.slice(en, nl === -1 ? originalValue.length : nl);
+    }
+    const targetHadContent = (prefix.trim() + suffix.trim()).length > 0;
     for (let k = 0; k < copiedLineModes.modes.length && startLine + k < lineModes.length; k++) {
+      if (k === 0 && targetHadContent) continue;   // existing line keeps its own mode
       lineModes[startLine + k] = copiedLineModes.modes[k];
     }
     const active = pages.find((p) => p.id === activePageId);
