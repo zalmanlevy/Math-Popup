@@ -23,6 +23,16 @@ setOnSettingsChanged((s) => settingsCbs.forEach((cb) => cb(s)));
 // ---- update channel: web is always the latest deploy, so this is inert ----
 const updateCbs = new Set<(state: any) => void>();
 
+// Navigate away only AFTER the pending write is committed. iOS freezes the page
+// during unload, so the async IndexedDB write in the pagehide handler frequently
+// doesn't land — which is why settings toggled right before tapping Back weren't
+// saved. Awaiting the flush inside the click/gesture (page still foregrounded) is
+// reliable; a short timeout guards against a hung write so navigation never stalls.
+function flushThenNavigate(href: string): void {
+  const guard = new Promise<void>((resolve) => setTimeout(resolve, 500));
+  void Promise.race([flushSettings(), guard]).finally(() => { location.assign(href); });
+}
+
 function clipboardFallback(text: string): void {
   try {
     const ta = document.createElement('textarea');
@@ -41,8 +51,8 @@ window.mathPopup = {
   setSettings,
   hidePopup: async () => { /* no tray/window on web */ },
   setAlwaysOnTop: async () => { /* no equivalent on web */ },
-  openSettings: async () => { location.assign('settings.html'); },
-  openHelp: async () => { location.assign('help.html'); },
+  openSettings: async () => { flushThenNavigate('settings.html'); },
+  openHelp: async () => { flushThenNavigate('help.html'); },
   copyText: (text: string) => {
     if (navigator.clipboard?.writeText) {
       navigator.clipboard.writeText(text).catch(() => clipboardFallback(text));
@@ -99,6 +109,17 @@ if (navigator.storage?.persist) {
 const flush = () => { void flushSettings(); };
 window.addEventListener('pagehide', flush);
 document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'hidden') flush(); });
+
+// The in-app Back link (settings/help → notes) navigates via a plain <a>; route it
+// through flushThenNavigate so a setting toggled just before tapping Back is committed
+// first (the pagehide flush alone is unreliable on iOS). Capture phase so we intercept
+// before the browser follows the href.
+document.addEventListener('click', (e) => {
+  const back = (e.target as HTMLElement | null)?.closest?.('a.web-back') as HTMLAnchorElement | null;
+  if (!back || e.defaultPrevented || e.button !== 0 || e.metaKey || e.ctrlKey) return;
+  e.preventDefault();
+  flushThenNavigate(back.getAttribute('href') || 'index.html');
+}, true);
 
 // Keep the focused editor line above the on-screen keyboard on iOS.
 if (window.visualViewport) {
