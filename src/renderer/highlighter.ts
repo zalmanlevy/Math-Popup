@@ -370,14 +370,14 @@ function renderInlineText(raw: string, baseCol: number): string {
     const close = escapeHtml(raw.slice(sp.closeStart, sp.outerEnd));
     if (sp.type === 'link') {
       // Link text carries its target (for the hover tooltip / Ctrl+Click), plus a
-      // little "open in new tab" icon. The icon is absolutely positioned so it adds
-      // no flow width (keeping the editor + overlay aligned); a plain click on it
-      // opens the URL directly (hit-tested in the editor — see popup.ts).
+      // little "open in new tab" icon. The icon is in normal flow, after the close
+      // marker; the editor layer adds a matching zero-text spacer so following text
+      // starts after it without shifting the caret/source mapping.
       const href = escapeAttr(sp.url ?? '');
       out += `<span class="md-marker"${attr}>${open}</span>` +
-        `<span class="md-link" data-href="${href}">${content}` +
-        `<span class="md-link-open" data-href="${href}" aria-hidden="true">${LINK_OPEN_SVG}</span></span>` +
-        `<span class="md-marker"${attr}>${close}</span>`;
+        `<span class="md-link" data-href="${href}">${content}</span>` +
+        `<span class="md-marker"${attr}>${close}</span>` +
+        `<span class="md-link-open" data-href="${href}" aria-hidden="true">${LINK_OPEN_SVG}</span>`;
     } else {
       const cls = sp.type === 'bold' ? 'md-bold' : sp.type === 'underline' ? 'md-underline' : 'md-italic';
       out += `<span class="md-marker"${attr}>${open}</span><span class="${cls}">${content}</span><span class="md-marker"${attr}>${close}</span>`;
@@ -422,7 +422,8 @@ function wrapInlineSpans(line: string, baseCol: number): string {
     const attr = ` data-cs="${baseCol + sp.outerStart}" data-ce="${baseCol + sp.outerEnd}"`;
     out += `<span class="ed-mk"${attr}>${escapeHtml(line.slice(sp.outerStart, sp.openEnd))}</span>` +
            escapeHtml(line.slice(sp.openEnd, sp.closeStart)) +
-           `<span class="ed-mk"${attr}>${escapeHtml(line.slice(sp.closeStart, sp.outerEnd))}</span>`;
+           `<span class="ed-mk"${attr}>${escapeHtml(line.slice(sp.closeStart, sp.outerEnd))}</span>` +
+           (sp.type === 'link' ? '<span class="ed-link-open-space" contenteditable="false" aria-hidden="true"></span>' : '');
     pos = sp.outerEnd;
   }
   out += escapeHtml(line.slice(pos));

@@ -1364,21 +1364,27 @@ body {
 .md-underline { text-decoration: underline; text-underline-offset: 2px; }
 /* [text](url) link — the visible text; the [ and ](url) are md-markers that conceal.
    Ctrl/Cmd+click opens it; the little icon after it opens on a plain click. */
-.md-link { position: relative; color: var(--accent); text-decoration: underline; text-underline-offset: 2px; cursor: pointer; }
-/* "open in new tab" icon — absolutely positioned so it adds NO flow width (keeps the
-   editor + overlay character-aligned). Sits just after the link text. */
+.md-link { color: var(--accent); text-decoration: underline; text-underline-offset: 2px; cursor: pointer; }
+/* "Open in new tab" icon. It reserves real inline width so following text never
+   sits underneath it; .ed-link-open-space mirrors that width in the editor layer. */
 .md-link-open {
-  position: absolute;
-  left: 100%;
-  top: 50%;
-  transform: translateY(-50%);
-  margin-left: 3px;
   display: inline-flex;
+  width: 14px;
+  padding-left: 3px;
+  box-sizing: border-box;
   align-items: center;
+  justify-content: flex-start;
+  vertical-align: -1px;
   color: var(--accent);
   opacity: 0.7;
 }
 .md-link-open svg { display: block; }
+.ed-link-open-space {
+  display: inline-block;
+  width: 14px;
+  vertical-align: -1px;
+}
+.ed-line.ed-math .ed-link-open-space { display: none; }
 .md-marker { color: var(--text-faint); }
 .md-task-box {
   display: inline-flex;

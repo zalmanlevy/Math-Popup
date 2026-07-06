@@ -111,9 +111,14 @@ function applyEditorConceal(caretLine: number) {
 // never drifts. Cheap class-toggling; safe on every caret move (no DOM rebuild).
 // Returns true if any reveal state changed (a width change → the caller re-lays out).
 let lastRevealLine = -1;
+let suppressEdgeRevealOffset: number | null = null;
 function applyMarkerReveal(): boolean {
   const caretLine = document.activeElement === editor ? caretLineIndex() : -1;
+  const caretOffset = document.activeElement === editor ? editor.selectionStart : -1;
   const caretCol = caretLine >= 0 ? caretColumnIndex() : -1;
+  if (suppressEdgeRevealOffset !== null && caretOffset !== suppressEdgeRevealOffset) {
+    suppressEdgeRevealOffset = null;
+  }
   let changed = false;
   const clearReveal = (parent: HTMLElement, i: number) => {
     const el = parent.children[i] as HTMLElement | undefined;
@@ -132,7 +137,14 @@ function applyMarkerReveal(): boolean {
       el.querySelectorAll<HTMLElement>('.ed-mk, .md-marker').forEach(m => {
         const cs = Number(m.dataset.cs);
         const ce = Number(m.dataset.ce);
-        const on = !Number.isNaN(cs) && caretCol >= cs && caretCol <= ce;
+        const inside = caretCol > cs && caretCol < ce;
+        // Direct adjacency counts as editing the span: `|**bold**` and
+        // `**bold**|` reveal, while `| **bold**` and `**bold** |` do not because
+        // the caret no longer sits on the span's edge. A source-level line merge
+        // suppresses this once at its landing point so Delete/Backspace does not
+        // immediately pop a pulled-up link open.
+        const edge = suppressEdgeRevealOffset === null && (caretCol === cs || caretCol === ce);
+        const on = !Number.isNaN(cs) && (inside || edge);
         if (m.classList.contains('mk-reveal') !== on) { m.classList.toggle('mk-reveal', on); changed = true; }
       });
     };
@@ -161,7 +173,16 @@ function applyEditorLineModes() {
 function edGatherLine(root: Node, focusNode: Node | null, focusOffset: number): { text: string; caret: number } {
   let text = '';
   let caret = -1;
+  const nodeTextLength = (n: Node): number => n.nodeName === 'BR' ? 0 : (n.textContent ?? '').length;
   const walk = (n: Node) => {
+    if (n === focusNode && n.nodeType === Node.ELEMENT_NODE) {
+      let before = 0;
+      const kids = Array.from(n.childNodes);
+      for (let i = 0; i < Math.min(focusOffset, kids.length); i++) {
+        before += nodeTextLength(kids[i]);
+      }
+      caret = text.length + before;
+    }
     for (const c of Array.from(n.childNodes)) {
       if (c.nodeType === Node.TEXT_NODE) {
         if (c === focusNode) caret = text.length + Math.min(focusOffset, (c as Text).length);
@@ -2523,6 +2544,39 @@ function linkUrlAtColumn(line: string, col: number): string | null {
   return null;
 }
 
+function handleLineBoundaryDelete(e: KeyboardEvent): boolean {
+  if (edComposing || e.ctrlKey || e.metaKey || e.altKey) return false;
+  if (e.key !== 'Delete' && e.key !== 'Backspace') return false;
+  if (editor.selectionStart !== editor.selectionEnd) return false;
+
+  const value = editor.value;
+  const caret = editor.selectionStart;
+  const deleteAt = e.key === 'Delete' ? caret : caret - 1;
+  if (deleteAt < 0 || deleteAt >= value.length || value[deleteAt] !== '\n') return false;
+
+  const oldLines = value.split('\n');
+  const mergeLine = value.slice(0, deleteAt).split('\n').length - 1;
+  const leftText = oldLines[mergeLine] ?? '';
+  const keepMode = leftText.trim().length === 0
+    ? lineModeAt(mergeLine + 1)
+    : lineModeAt(mergeLine);
+  const nextModes: Mode[] = [];
+  for (let i = 0; i < oldLines.length - 1; i++) {
+    if (i < mergeLine) nextModes[i] = lineModeAt(i);
+    else if (i === mergeLine) nextModes[i] = keepMode;
+    else nextModes[i] = lineModeAt(i + 1);
+  }
+
+  e.preventDefault();
+  editor.value = value.slice(0, deleteAt) + value.slice(deleteAt + 1);
+  lineModes = nextModes;
+  lineModesText = editor.value;
+  edSetSelection(deleteAt, deleteAt);
+  suppressEdgeRevealOffset = deleteAt;
+  onInput();
+  return true;
+}
+
 function onKeyDown(e: KeyboardEvent) {
   // Ctrl+T (new tab), Ctrl+W (close tab), Ctrl+L (rename current tab)
   if (e.ctrlKey && !e.altKey && !e.metaKey && !e.shiftKey) {
@@ -2607,6 +2661,10 @@ function onKeyDown(e: KeyboardEvent) {
   if (menuState.open) {
     if (handleMenuKey(e)) return;
   }
+
+  // Native contenteditable line merges can drop or rearrange concealed marker
+  // spans at block boundaries. Merge source text directly, then normalize.
+  if (handleLineBoundaryDelete(e)) return;
 
   // Word-style list continuation in text mode: Enter after a "- " or "1. " item
   // starts the next item (numbers auto-increment); Enter on an empty item ends
