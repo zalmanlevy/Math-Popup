@@ -419,6 +419,13 @@ function registerIPC() {
   });
   ipcMain.handle('settings:open', () => openSettings());
   ipcMain.handle('help:open', () => openHelp());
+  // Open a note's markdown link in the user's default browser. Only safe web /
+  // mail schemes — never file:// or arbitrary protocol handlers from note text.
+  ipcMain.handle('shell:openExternal', (_e, url: string) => {
+    if (typeof url === 'string' && /^(https?:|mailto:)/i.test(url.trim())) {
+      return require('electron').shell.openExternal(url.trim());
+    }
+  });
 
   ipcMain.handle('obsidian:chooseNote', async () => {
     const options: Electron.OpenDialogOptions = {

@@ -630,7 +630,16 @@ AVERAGE(L1:L3)    → 20</code></pre>
       <ul>
         <li><code># Heading</code>, <code>## Heading</code>, <code>### Heading</code> — header lines are not evaluated.</li>
         <li><code>- item</code> or <code>* item</code> — bulleted line. On a math line the content after the bullet is still evaluated. <kbd>Enter</kbd> continues the list, and <kbd>Tab</kbd> / <kbd>Shift</kbd>+<kbd>Tab</kbd> indent / outdent the item.</li>
-        <li><code>**bold**</code> and <code>*italic*</code> — inline emphasis.</li>
+        <li><strong>Emphasis</strong> — <code>**bold**</code>, <code>*italic*</code>, and <code>__underline__</code>. Select text and press
+          <kbd>Ctrl</kbd>+<kbd>B</kbd> / <kbd>Ctrl</kbd>+<kbd>I</kbd> / <kbd>Ctrl</kbd>+<kbd>U</kbd> to wrap or unwrap it.</li>
+        <li><strong>Obsidian-style reveal</strong> — the markers (the <code>**</code>, <code>*</code>, <code>__</code>, and a link's brackets)
+          hide so you see just the styled text, and reappear only while your cursor is <em>inside that specific word</em> — so a
+          formatted note stays clean, and moving to a different word on the same line hides the first one's markers again.</li>
+        <li><strong>Links</strong> — <code>[text](https://…)</code> renders as a clickable link showing just <em>text</em>. Press
+          <kbd>Ctrl</kbd>+<kbd>K</kbd> to turn the selected words into a link (the caret lands in the <code>()</code> to type the URL;
+          with nothing selected it inserts an empty <code>[]()</code>). Open a link by <kbd>Ctrl</kbd>/<kbd>Cmd</kbd>+clicking its
+          text, or with a plain click on the little <strong>↗</strong> "open" icon next to it — it opens in your default browser.
+          Hover a link for a reminder tooltip.</li>
       </ul>
     </section>
 
@@ -650,6 +659,9 @@ AVERAGE(L1:L3)    → 20</code></pre>
           <tr><td><kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>Z</kbd> / <kbd>Ctrl</kbd>+<kbd>Y</kbd></td><td>Redo</td></tr>
           <tr><td><kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>C</kbd></td><td>Copy the current line's numeric result</td></tr>
           <tr><td><kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>M</kbd></td><td>Copy the whole note as markdown with results inline</td></tr>
+          <tr><td><kbd>Ctrl</kbd>+<kbd>B</kbd> / <kbd>Ctrl</kbd>+<kbd>I</kbd> / <kbd>Ctrl</kbd>+<kbd>U</kbd></td><td>Bold / italic / underline the selection</td></tr>
+          <tr><td><kbd>Ctrl</kbd>+<kbd>K</kbd></td><td>Turn the selection into a <code>[text](url)</code> link</td></tr>
+          <tr><td><kbd>Ctrl</kbd>/<kbd>Cmd</kbd>+click a link</td><td>Open the link in your default browser (or click its ↗ icon)</td></tr>
           <tr><td><kbd>Tab</kbd></td><td>Math line: tidy the current number's commas and jump past it to a single trailing space, suffix included (<kbd>Space</kbd> in a number does the same). Text list item: indent it (<kbd>Shift</kbd>+<kbd>Tab</kbd> outdents)</td></tr>
           <tr><td><kbd>Enter</kbd></td><td>Continues a list item; the new line keeps the current line's math/text type</td></tr>
           <tr><td><kbd>↑</kbd> / <kbd>↓</kbd> / <kbd>Enter</kbd></td><td>Navigate / confirm in the slash and L popups</td></tr>

@@ -82,15 +82,13 @@ export function highlightNote(text: string, lineResults: LineResult[], lineModes
       // Each line is its own block so layoutGutters can read per-line heights and
       // so each line wraps independently: math lines get .ov-math (reserving the
       // answer column via right padding) while text lines use the full width.
-      // Obsidian-style conceal. Inline bold/italic/underline markers reveal whenever
-      // the caret is on the line; a task line's "- " bullet reveals only while the
-      // caret sits in that line's leading marker region (so typing the task text
-      // keeps the dash hidden). caretLine === -1 when unfocused, so all reads clean.
+      // Obsidian-style conceal. Inline bold/italic/underline (and link) markers are
+      // hidden by default on text lines and revealed per-SPAN by applyMarkerReveal()
+      // — only while the caret is inside that span. A task line's "- " bullet reveals
+      // only while the caret sits in its leading marker region.
       const isText = mode === 'text';
-      const lineConceal = isText && i !== caretLine;
       const bulletConceal = isText && !(i === caretLine && caretCol >= 0 && caretCol <= taskMarkerEndCol(line));
       let cls = mode === 'math' ? 'ov-line ov-math' : 'ov-line';
-      if (lineConceal) cls += ' ov-conceal';
       if (bulletConceal) cls += ' ov-bullet-conceal';
       const indent = listIndentCols(line, bulletConceal);
       const style = indent > 0 ? ` style="padding-left:${indent}ch;text-indent:-${indent}ch"` : '';
@@ -116,7 +114,7 @@ function tokenizeLine(line: string, r: LineResult | undefined, ctx: HighlightCon
   if (hMatch) {
     const [, lead, hashes, gap, rest] = hMatch;
     const cls = hashes.length === 1 ? 'md-h1' : hashes.length === 2 ? 'md-h2' : 'md-h3';
-    return `${escapeHtml(lead)}<span class="md-h-marker">${escapeHtml(hashes)}</span>${escapeHtml(gap)}<span class="${cls}">${highlightInlineMarkdown(escapeHtml(rest))}</span>`;
+    return `${escapeHtml(lead)}<span class="md-h-marker">${escapeHtml(hashes)}</span>${escapeHtml(gap)}<span class="${cls}">${renderInlineText(rest, lead.length + hashes.length + gap.length)}</span>`;
   }
 
   // Obsidian task checkbox: keep the checkbox marker at exactly 3ch wide so the
@@ -157,11 +155,11 @@ function renderTextContent(raw: string, lineResults: LineResult[], isCaretLine: 
   let last = 0;
   let m: RegExpExecArray | null;
   while ((m = refRe.exec(raw)) !== null) {
-    out += highlightInlineMarkdown(escapeHtml(raw.slice(last, m.index)));
+    out += renderInlineText(raw.slice(last, m.index), last);
     out += renderRefToken(m[0], parseInt(m[1], 10), lineResults, isCaretLine);
     last = m.index + m[0].length;
   }
-  out += highlightInlineMarkdown(escapeHtml(raw.slice(last)));
+  out += renderInlineText(raw.slice(last), last);
   return out;
 }
 
@@ -297,6 +295,99 @@ function highlightInlineMarkdown(s: string): string {
   return s;
 }
 
+// ---- inline spans (bold/italic/underline), parsed left-to-right on RAW text so
+// each formatted run knows its column range. That range drives per-SPAN conceal:
+// a span's markers reveal only while the caret sits inside THAT span, not anywhere
+// on the line. Both render layers (overlay .md-marker, editor .ed-mk) tag their
+// markers with the same [data-cs, data-ce] so they conceal/reveal in lockstep. ----
+export interface InlineSpan {
+  type: 'bold' | 'italic' | 'underline' | 'link';
+  outerStart: number;   // column of the first marker char
+  openEnd: number;      // column where the visible content starts
+  closeStart: number;   // column where the visible content ends
+  outerEnd: number;     // column just past the last marker char
+  url?: string;         // for links: the [text](url) target
+}
+export function parseInlineSpans(raw: string): InlineSpan[] {
+  const spans: InlineSpan[] = [];
+  let i = 0;
+  while (i < raw.length) {
+    // [text](url) link — the visible part is `text`; `[` and `](url)` are markers
+    if (raw[i] === '[') {
+      const rb = raw.indexOf(']', i + 1);
+      if (rb > i + 1 && raw[rb + 1] === '(') {
+        const rp = raw.indexOf(')', rb + 2);
+        if (rp > rb + 2 && raw.slice(rb + 2, rp).indexOf(' ') === -1) {
+          spans.push({ type: 'link', outerStart: i, openEnd: i + 1, closeStart: rb, outerEnd: rp + 1, url: raw.slice(rb + 2, rp) });
+          i = rp + 1; continue;
+        }
+      }
+    }
+    // **bold** — content has no '*' (matches the /\*\*[^*\n]+\*\*/ rule)
+    if (raw.startsWith('**', i)) {
+      const close = raw.indexOf('**', i + 2);
+      if (close > i + 2 && raw.slice(i + 2, close).indexOf('*') === -1) {
+        spans.push({ type: 'bold', outerStart: i, openEnd: i + 2, closeStart: close, outerEnd: close + 2 });
+        i = close + 2; continue;
+      }
+    }
+    // __underline__ — content has no '_'
+    if (raw.startsWith('__', i)) {
+      const close = raw.indexOf('__', i + 2);
+      if (close > i + 2 && raw.slice(i + 2, close).indexOf('_') === -1) {
+        spans.push({ type: 'underline', outerStart: i, openEnd: i + 2, closeStart: close, outerEnd: close + 2 });
+        i = close + 2; continue;
+      }
+    }
+    // *italic* — a lone '*' (not part of '**'), content has no '*'
+    if (raw[i] === '*' && raw[i + 1] !== '*' && raw[i - 1] !== '*') {
+      const close = raw.indexOf('*', i + 1);
+      if (close > i + 1 && raw[close + 1] !== '*' && raw.slice(i + 1, close).indexOf('*') === -1) {
+        spans.push({ type: 'italic', outerStart: i, openEnd: i + 1, closeStart: close, outerEnd: close + 1 });
+        i = close + 1; continue;
+      }
+    }
+    i++;
+  }
+  return spans;
+}
+
+// "Open in new tab" icon (box with an arrow leaving the top-right corner).
+const LINK_OPEN_SVG = '<svg viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M14 3h7v7"/><path d="M10 14 21 3"/><path d="M21 14v5a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5"/></svg>';
+
+// Render a raw text run for the OVERLAY: colored formatting + markers tagged with
+// their span's column range (baseCol is the run's start column in the full line).
+function renderInlineText(raw: string, baseCol: number): string {
+  const spans = parseInlineSpans(raw);
+  if (spans.length === 0) return highlightInlineMarkdown(escapeHtml(raw));
+  let out = '';
+  let pos = 0;
+  for (const sp of spans) {
+    out += escapeHtml(raw.slice(pos, sp.outerStart));
+    const attr = ` data-cs="${baseCol + sp.outerStart}" data-ce="${baseCol + sp.outerEnd}"`;
+    const open = escapeHtml(raw.slice(sp.outerStart, sp.openEnd));
+    const content = escapeHtml(raw.slice(sp.openEnd, sp.closeStart));
+    const close = escapeHtml(raw.slice(sp.closeStart, sp.outerEnd));
+    if (sp.type === 'link') {
+      // Link text carries its target (for the hover tooltip / Ctrl+Click), plus a
+      // little "open in new tab" icon. The icon is absolutely positioned so it adds
+      // no flow width (keeping the editor + overlay aligned); a plain click on it
+      // opens the URL directly (hit-tested in the editor — see popup.ts).
+      const href = escapeAttr(sp.url ?? '');
+      out += `<span class="md-marker"${attr}>${open}</span>` +
+        `<span class="md-link" data-href="${href}">${content}` +
+        `<span class="md-link-open" data-href="${href}" aria-hidden="true">${LINK_OPEN_SVG}</span></span>` +
+        `<span class="md-marker"${attr}>${close}</span>`;
+    } else {
+      const cls = sp.type === 'bold' ? 'md-bold' : sp.type === 'underline' ? 'md-underline' : 'md-italic';
+      out += `<span class="md-marker"${attr}>${open}</span><span class="${cls}">${content}</span><span class="md-marker"${attr}>${close}</span>`;
+    }
+    pos = sp.outerEnd;
+  }
+  out += escapeHtml(raw.slice(pos));
+  return out;
+}
+
 // Wrap ONLY the inline-markdown markers (** __ *) of a raw line in
 // <span class="ed-mk">, leaving the formatted text as plain escaped text. The
 // editor (transparent edit layer) renders lines through this so those markers can
@@ -308,20 +399,34 @@ function highlightInlineMarkdown(s: string): string {
 export function wrapInlineMarkers(line: string): string {
   // A task line also conceals its "- " bullet (an unfocused task reads as just the
   // checkbox). Wrap that prefix in .ed-mk, keeping the nesting lead visible, then
-  // wrap the inline markers in the rest.
+  // wrap the inline markers in the rest (offset by the prefix width so the tagged
+  // marker columns stay in the full-line coordinate space).
   const task = /^(\s*)([-*+])(\s+)(\[[ xX]\].*)$/.exec(line);
   if (task) {
     const [, lead, mark, gap, rest] = task;
-    return escapeHtml(lead) + `<span class="ed-task-mk">${escapeHtml(mark + gap)}</span>` + wrapInlineSpans(rest);
+    return escapeHtml(lead) + `<span class="ed-task-mk">${escapeHtml(mark + gap)}</span>` +
+      wrapInlineSpans(rest, lead.length + mark.length + gap.length);
   }
-  return wrapInlineSpans(line);
+  return wrapInlineSpans(line, 0);
 }
-function wrapInlineSpans(line: string): string {
-  let s = escapeHtml(line);
-  s = s.replace(/\*\*([^*\n]+)\*\*/g, '<span class="ed-mk">**</span>$1<span class="ed-mk">**</span>');
-  s = s.replace(/__([^_\n]+)__/g, '<span class="ed-mk">__</span>$1<span class="ed-mk">__</span>');
-  s = s.replace(/(^|[^*<>])\*([^*\n<>]+)\*(?!\*)/g, '$1<span class="ed-mk">*</span>$2<span class="ed-mk">*</span>');
-  return s;
+// Editor layer: the SAME spans/columns as renderInlineText, but plain (transparent)
+// text plus the .ed-mk markers — so both layers collapse/reveal identical characters
+// and the caret never drifts. Each marker carries its span's [data-cs, data-ce].
+function wrapInlineSpans(line: string, baseCol: number): string {
+  const spans = parseInlineSpans(line);
+  if (spans.length === 0) return escapeHtml(line);
+  let out = '';
+  let pos = 0;
+  for (const sp of spans) {
+    out += escapeHtml(line.slice(pos, sp.outerStart));
+    const attr = ` data-cs="${baseCol + sp.outerStart}" data-ce="${baseCol + sp.outerEnd}"`;
+    out += `<span class="ed-mk"${attr}>${escapeHtml(line.slice(sp.outerStart, sp.openEnd))}</span>` +
+           escapeHtml(line.slice(sp.openEnd, sp.closeStart)) +
+           `<span class="ed-mk"${attr}>${escapeHtml(line.slice(sp.closeStart, sp.outerEnd))}</span>`;
+    pos = sp.outerEnd;
+  }
+  out += escapeHtml(line.slice(pos));
+  return out;
 }
 
 function escapeHtml(s: string): string {
@@ -329,6 +434,9 @@ function escapeHtml(s: string): string {
     .replace(/&/g, '&amp;')
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;');
+}
+function escapeAttr(s: string): string {
+  return escapeHtml(s).replace(/"/g, '&quot;');
 }
 
 // Re-export so popup.ts can read the function list (e.g. for the slash menu's

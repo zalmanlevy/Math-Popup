@@ -53,6 +53,9 @@ window.mathPopup = {
   setAlwaysOnTop: async () => { /* no equivalent on web */ },
   openSettings: async () => { flushThenNavigate('settings.html'); },
   openHelp: async () => { flushThenNavigate('help.html'); },
+  openExternal: async (url: string) => {
+    if (/^(https?:|mailto:)/i.test(url.trim())) window.open(url.trim(), '_blank', 'noopener,noreferrer');
+  },
   copyText: (text: string) => {
     if (navigator.clipboard?.writeText) {
       navigator.clipboard.writeText(text).catch(() => clipboardFallback(text));

@@ -876,14 +876,16 @@ body {
   padding-right: var(--editor-reserve);
 }
 
-/* Obsidian-style conceal: collapse the inline bold/italic/underline markers on
-   every line except the one the caret is on. The editor's transparent .ed-mk and
-   the overlay's colored .md-marker wrap the SAME characters, so hiding both keeps
-   the two layers character-aligned (and only inline markers hide — list bullets
-   .md-bullet and header hashes .md-h-marker are untouched). */
-/* Inline markers (** * __) collapse whenever the caret is off the line. */
-.ed-line.ed-conceal .ed-mk,
-.ov-line.ov-conceal .md-marker { display: none; }
+/* Obsidian-style conceal: inline bold/italic/underline/link markers are collapsed
+   on text lines and revealed PER-SPAN — only the span the caret is inside shows its
+   markers (.mk-reveal, toggled by applyMarkerReveal). The editor's transparent
+   .ed-mk and the overlay's colored .md-marker wrap the SAME characters and share the
+   reveal, so the two layers stay character-aligned. Math lines always show markers
+   (list bullets .md-bullet and header hashes .md-h-marker are untouched). */
+.ed-line:not(.ed-math) .ed-mk,
+.ov-line:not(.ov-math) .md-marker { display: none; }
+.ed-line:not(.ed-math) .ed-mk.mk-reveal,
+.ov-line:not(.ov-math) .md-marker.mk-reveal { display: inline; }
 /* A task line's "- " bullet collapses unless the caret is in its marker region
    (ed-bullet-conceal / ov-bullet-conceal are toggled per caret column, not just
    per line — see applyEditorConceal / highlightNote). */
@@ -1348,6 +1350,8 @@ body {
 .hover-tooltip .tip-title { font-weight: 600; margin-bottom: 3px; }
 .hover-tooltip .tip-type-math { color: var(--result); font-weight: 700; }
 .hover-tooltip .tip-type-text { color: var(--accent); font-weight: 700; }
+/* link-hover tooltip: the URL under the "Ctrl+Click to open" line */
+.hover-tooltip .tip-url { color: var(--accent); font-size: 10px; word-break: break-all; }
 
 /* markdown */
 .md-h1 { color: var(--header); font-weight: 700; }
@@ -1358,6 +1362,23 @@ body {
 .md-bold { font-weight: 700; color: var(--text); }
 .md-italic { font-style: italic; color: var(--text); }
 .md-underline { text-decoration: underline; text-underline-offset: 2px; }
+/* [text](url) link — the visible text; the [ and ](url) are md-markers that conceal.
+   Ctrl/Cmd+click opens it; the little icon after it opens on a plain click. */
+.md-link { position: relative; color: var(--accent); text-decoration: underline; text-underline-offset: 2px; cursor: pointer; }
+/* "open in new tab" icon — absolutely positioned so it adds NO flow width (keeps the
+   editor + overlay character-aligned). Sits just after the link text. */
+.md-link-open {
+  position: absolute;
+  left: 100%;
+  top: 50%;
+  transform: translateY(-50%);
+  margin-left: 3px;
+  display: inline-flex;
+  align-items: center;
+  color: var(--accent);
+  opacity: 0.7;
+}
+.md-link-open svg { display: block; }
 .md-marker { color: var(--text-faint); }
 .md-task-box {
   display: inline-flex;

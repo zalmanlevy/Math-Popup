@@ -741,20 +741,25 @@ function shortError(msg: string): string {
   return first.length > 80 ? first.slice(0, 77) + '…' : first;
 }
 
-// If the whole (trimmed) string is wrapped in matching quotes, return its inner
-// content; otherwise null. Matches the OUTERMOST quotes, so internal apostrophes
-// (e.g. it's) don't terminate it early.
+// If the whole (trimmed) string is a SINGLE quoted segment, return its inner
+// content; otherwise null. Uses closingQuoteAtDepth0 so an internal apostrophe
+// (it's) doesn't end it early, but two separate quotes with math between them —
+// e.g. 'a' 5 'b', which is NOT one string — correctly returns null so the math runs.
 function wholeQuotedInner(s: string): string | null {
   const t = s.trim();
-  if (t.length >= 2 && (t[0] === '"' || t[0] === "'") && t[t.length - 1] === t[0]) {
-    return t.slice(1, -1);
+  if (t.length >= 2 && (t[0] === '"' || t[0] === "'")) {
+    const close = closingQuoteAtDepth0(t, t[0], 1);
+    if (close === t.length - 1) return t.slice(1, -1);
   }
   return null;
 }
 
 // Remove quoted segments ("..." or '...') that sit at the top level (outside any
-// parentheses) — they're text annotations, not math. Quotes inside parentheses
-// are preserved so function string args (e.g. IF(x, "A", "B")) still work.
+// parentheses) — they're text annotations, not math. Quotes inside parentheses are
+// preserved so function string args (e.g. IF(x, "A", "B")) still work. Each segment
+// pairs with its OWN nearest closing delimiter, so any number of annotations —
+// before, after, or around the math — are all stripped independently (e.g.
+// 'zalman' 1,350 'didn't pay' keeps the 1,350).
 // Returns the cleaned text plus the contents of each removed top-level quote.
 function stripTopLevelQuotes(s: string): { text: string; removed: string[] } {
   let out = '';
@@ -765,13 +770,11 @@ function stripTopLevelQuotes(s: string): { text: string; removed: string[] } {
     const ch = s[i];
     if (ch === '(') { depth++; out += ch; i++; continue; }
     if (ch === ')') { depth = depth > 0 ? depth - 1 : 0; out += ch; i++; continue; }
-    // Only quotes OUTSIDE parentheses are annotations; quotes inside are kept
-    // (function string args like IF(x, "A", "B")).
-    if (depth === 0 && (ch === '"' || ch === "'")) {
-      // Outermost match: pair with the LAST same-type quote at depth 0 in the
-      // remainder, so inner quotes/apostrophes (e.g. it's) are absorbed and the
-      // whole annotation is ignored — letting you add math elsewhere on the line.
-      const close = lastQuoteAtDepth0(s, ch, i + 1);
+    // A quote at depth 0 opens an annotation — unless it's an in-word apostrophe
+    // (letters/digits on both sides, e.g. it's), which is just literal text and must
+    // not start a phantom quote.
+    if (depth === 0 && (ch === '"' || ch === "'") && !inWordApostrophe(s, i)) {
+      const close = closingQuoteAtDepth0(s, ch, i + 1);
       if (close === -1) {
         removed.push(s.slice(i + 1)); // unterminated → strip the rest
         return { text: out, removed };
@@ -787,18 +790,27 @@ function stripTopLevelQuotes(s: string): { text: string; removed: string[] } {
   return { text: out, removed };
 }
 
-// Index of the LAST occurrence of quote char `q` at paren-depth 0 at/after
-// `from`, or -1 — so a quoted annotation pairs with its OUTERMOST quote.
-function lastQuoteAtDepth0(s: string, q: string, from: number): number {
+// A `'` flanked by word chars on both sides is an apostrophe INSIDE a word (it's,
+// didn't) — literal text, not a delimiter. Double quotes never need this.
+function isWordChar(c: string | undefined): boolean {
+  return c !== undefined && /[A-Za-z0-9]/.test(c);
+}
+function inWordApostrophe(s: string, j: number): boolean {
+  return s[j] === "'" && isWordChar(s[j - 1]) && isWordChar(s[j + 1]);
+}
+
+// Index of the closing quote `q` at paren-depth 0 at/after `from`, skipping in-word
+// apostrophes; -1 if none. Pairing each `'…'` / `"…"` with its OWN nearest real
+// delimiter is what lets multiple annotations on one line be stripped independently.
+function closingQuoteAtDepth0(s: string, q: string, from: number): number {
   let depth = 0;
-  let last = -1;
   for (let j = from; j < s.length; j++) {
     const c = s[j];
     if (c === '(') depth++;
     else if (c === ')') depth = depth > 0 ? depth - 1 : 0;
-    else if (c === q && depth === 0) last = j;
+    else if (c === q && depth === 0 && !inWordApostrophe(s, j)) return j;
   }
-  return last;
+  return -1;
 }
 
 // Evaluate an arbitrary sub-expression (e.g. text the user dragged over within

@@ -1,5 +1,5 @@
 import { evaluateNote, evaluateSelectedText, LineResult, EXCEL_FORMULA_TOOLTIP, X_RESERVED_TOOLTIP, UNQUOTED_STRING_TOOLTIP, RESERVED_NAME_TOOLTIP, DUPLICATE_VAR_TOOLTIP, isExcelFunctionName } from './evaluator';
-import { highlightNote, listIndentCols, taskMarkerEndCol, wrapInlineMarkers, ActiveToken } from './highlighter';
+import { highlightNote, listIndentCols, taskMarkerEndCol, wrapInlineMarkers, parseInlineSpans, ActiveToken } from './highlighter';
 import { formatWithCommas, formatResult } from './formatter';
 import type { Mode, Page, Settings, Suffix, ThemePref } from '../shared/types';
 import { ZOOM_MIN, ZOOM_MAX, ZOOM_STEP } from '../shared/types';
@@ -89,12 +89,10 @@ function applyEditorConceal(caretLine: number) {
   for (let i = 0; i < divs.length; i++) {
     const el = divs[i] as HTMLElement;
     const isText = lineModeAt(i) === 'text';
-    // Inline markers reveal on the caret line; the task "- " bullet reveals only
-    // when the caret is in that line's leading marker region (keep them in sync
-    // with highlightNote).
-    const lineConceal = isText && i !== caretLine;
+    // The task "- " bullet reveals only when the caret is in that line's leading
+    // marker region. Inline markers (bold/italic/underline/link) are handled
+    // separately, per-span, by applyMarkerReveal().
     const bulletConceal = isText && !(i === caretLine && caretCol >= 0 && caretCol <= taskMarkerEndCol(lines[i] ?? ''));
-    el.classList.toggle('ed-conceal', lineConceal);
     el.classList.toggle('ed-bullet-conceal', bulletConceal);
     const cols = listIndentCols(lines[i] ?? '', bulletConceal);
     if (cols > 0) {
@@ -105,6 +103,46 @@ function applyEditorConceal(caretLine: number) {
       el.style.textIndent = '';
     }
   }
+}
+
+// Reveal a formatted span's markers (bold **, italic *, underline __, link) only
+// while the caret sits INSIDE that span — in BOTH the editor (.ed-mk) and overlay
+// (.md-marker) layers, so they collapse/reveal identical characters and the caret
+// never drifts. Cheap class-toggling; safe on every caret move (no DOM rebuild).
+// Returns true if any reveal state changed (a width change → the caller re-lays out).
+let lastRevealLine = -1;
+function applyMarkerReveal(): boolean {
+  const caretLine = document.activeElement === editor ? caretLineIndex() : -1;
+  const caretCol = caretLine >= 0 ? caretColumnIndex() : -1;
+  let changed = false;
+  const clearReveal = (parent: HTMLElement, i: number) => {
+    const el = parent.children[i] as HTMLElement | undefined;
+    el?.querySelectorAll('.mk-reveal').forEach(m => { m.classList.remove('mk-reveal'); changed = true; });
+  };
+  // The editor isn't rebuilt on a bare caret move, so a line we left keeps stale
+  // reveals — clear them (the overlay is rebuilt fresh, so clearing there is a no-op).
+  if (lastRevealLine >= 0 && lastRevealLine !== caretLine) {
+    clearReveal(ed, lastRevealLine);
+    clearReveal(overlay, lastRevealLine);
+  }
+  if (caretLine >= 0 && caretCol >= 0) {
+    const applyTo = (parent: HTMLElement) => {
+      const el = parent.children[caretLine] as HTMLElement | undefined;
+      if (!el) return;
+      el.querySelectorAll<HTMLElement>('.ed-mk, .md-marker').forEach(m => {
+        const cs = Number(m.dataset.cs);
+        const ce = Number(m.dataset.ce);
+        const on = !Number.isNaN(cs) && caretCol >= cs && caretCol <= ce;
+        if (m.classList.contains('mk-reveal') !== on) { m.classList.toggle('mk-reveal', on); changed = true; }
+      });
+    };
+    applyTo(ed);
+    applyTo(overlay);
+    lastRevealLine = caretLine;
+  } else {
+    lastRevealLine = -1;
+  }
+  return changed;
 }
 
 // Toggle the per-line math class on existing .ed-line blocks. Concealment + the
@@ -463,8 +501,54 @@ function bindEvents() {
       if (!cmdMenu.contains(document.activeElement)) hideMenu();
     }, 100);
     hideSignatureTooltip();
+    applyMarkerReveal();   // caret gone → conceal any revealed span's markers
   });
+  editor.addEventListener('focus', () => { applyMarkerReveal(); });
   editor.addEventListener('click', () => { edRefreshSelectionCache(); updateMenuFromCaret(true); updateActiveToken(); });
+  // Ctrl/Cmd+click a `[text](url)` link → open it in the default browser (Obsidian-
+  // style; a plain click still just places the caret so you can edit the link).
+  editor.addEventListener('click', (e) => {
+    if (!(e.ctrlKey || e.metaKey)) return;
+    edRefreshSelectionCache();
+    const caret = editor.selectionStart;
+    const value = editor.value;
+    const lineStart = value.lastIndexOf('\n', caret - 1) + 1;
+    const nl = value.indexOf('\n', caret);
+    const line = value.slice(lineStart, nl === -1 ? value.length : nl);
+    const url = linkUrlAtColumn(line, caret - lineStart);
+    if (url) { e.preventDefault(); window.mathPopup.openExternal(url); }
+  });
+  // Hovering a link shows a custom "Ctrl+Click to open" tooltip. The link text lives
+  // in the (pointer-events-free) overlay, so hit-test the mouse against the .md-link
+  // rects rather than relying on the overlay to receive the hover.
+  editor.addEventListener('mousemove', (e) => {
+    lastLinkMouseX = e.clientX; lastLinkMouseY = e.clientY;
+    updateLinkHover(e.clientX, e.clientY);
+    refreshLinkCursor(e.clientX, e.clientY, e.ctrlKey || e.metaKey);
+  });
+  editor.addEventListener('mouseleave', () => {
+    hoveredLinkEl = null; lastLinkMouseX = -1; hideTooltip(); editor.style.cursor = '';
+  });
+  // Pressing/releasing Ctrl/Cmd while the mouse rests over a link flips the cursor
+  // to/from the pointer (no mousemove fires, so re-evaluate on the key event).
+  const refreshCursorOnMod = (e: KeyboardEvent) => {
+    if ((e.key === 'Control' || e.key === 'Meta') && lastLinkMouseX >= 0) {
+      refreshLinkCursor(lastLinkMouseX, lastLinkMouseY, e.ctrlKey || e.metaKey);
+    }
+  };
+  document.addEventListener('keydown', refreshCursorOnMod);
+  document.addEventListener('keyup', refreshCursorOnMod);
+  // A plain click on a link's little "open" icon opens it directly (no Ctrl). Handle
+  // on mousedown + preventDefault so the caret doesn't jump into the link first.
+  editor.addEventListener('mousedown', (e) => {
+    if (e.button !== 0) return;
+    const icon = linkOpenIconAt(e.clientX, e.clientY);
+    if (icon) {
+      e.preventDefault();
+      const url = icon.dataset.href;
+      if (url) window.mathPopup.openExternal(url);
+    }
+  });
   // Right-click in the editor: switch the selected line(s) — or the caret line —
   // between math and text. (Electron shows no native editor menu, so nothing is
   // lost by handling this.)
@@ -480,6 +564,9 @@ function bindEvents() {
     if (document.activeElement !== editor) return;
     edRefreshSelectionCache();
     if (caretLineIndex() !== lastCaretLine || bulletRevealLineNow() !== lastBulletRevealLine) refreshCaretLineDisplay();
+    // Same-line caret move: still re-evaluate which span's markers reveal. A width
+    // change from revealing/hiding markers can shift a wrapped line, so re-lay-out.
+    else if (applyMarkerReveal()) layoutGutters();
   });
   // Line-number gutter: click a number to drop its L-ref at the caret. Using
   // mousedown + preventDefault keeps the textarea focused and its caret intact
@@ -1001,40 +1088,33 @@ interface LineShift {
 }
 
 function computeLineShift(oldLines: string[], newLines: string[]): LineShift | null {
-  const oldText = oldLines.join('\\n');
-  const newText = newLines.join('\\n');
-  const minLen = Math.min(oldText.length, newText.length);
-  
+  // Whole-LINE diff: how many entire lines match at the top and at the bottom. This
+  // is robust where the old char-level diff wasn't — adjacent lines that share
+  // leading/trailing characters (e.g. "70" and "80" both end in "0") made the
+  // char diff miscount the line boundary, leaving a formula line in the "unshifted"
+  // middle so its L<n> refs never updated (adding a row under SUM(L1:L7) didn't grow it).
+  const oldLen = oldLines.length;
+  const newLen = newLines.length;
   let prefix = 0;
-  while (prefix < minLen && oldText[prefix] === newText[prefix]) prefix++;
-  
+  while (prefix < oldLen && prefix < newLen && oldLines[prefix] === newLines[prefix]) prefix++;
   let suffix = 0;
-  while (suffix < minLen - prefix && 
-         oldText[oldText.length - 1 - suffix] === newText[newText.length - 1 - suffix]) {
+  while (suffix < oldLen - prefix && suffix < newLen - prefix &&
+         oldLines[oldLen - 1 - suffix] === newLines[newLen - 1 - suffix]) {
     suffix++;
   }
 
-  const oldPrefixLines = (oldText.slice(0, prefix).match(/\\n/g) || []).length;
-  const newPrefixLines = (newText.slice(0, prefix).match(/\\n/g) || []).length;
-  const oldSuffixLines = (oldText.slice(oldText.length - suffix).match(/\\n/g) || []).length;
-  const newSuffixLines = (newText.slice(newText.length - suffix).match(/\\n/g) || []).length;
-
-  const oldLen = oldLines.length;
-  const newLen = newLines.length;
-  
   const map = new Map<number, number>();
   let anyShift = false;
-  
-  for (let i = 0; i < oldPrefixLines; i++) map.set(i, i);
-  for (let i = 0; i <= oldSuffixLines && i < oldLen; i++) {
+  for (let i = 0; i < prefix; i++) map.set(i, i);
+  for (let i = 0; i < suffix; i++) {
     const oldIdx = oldLen - 1 - i;
     const newIdx = newLen - 1 - i;
     map.set(oldIdx, newIdx);
     if (oldIdx !== newIdx) anyShift = true;
   }
-  
+
   if (!anyShift) return null;
-  return { map, shiftedPrefixEnd: oldPrefixLines, shiftedSuffixStart: newLen - oldSuffixLines };
+  return { map, shiftedPrefixEnd: prefix, shiftedSuffixStart: newLen - suffix };
 }
 
 function rewriteLineRefs(
@@ -1070,8 +1150,13 @@ function rewriteLineRefs(
         const aOld = Number(m[1]) - 1;
         const bOld = Number(m[2]) - 1;
         const aNew = shift.map.get(aOld);
-        const bNew = shift.map.get(bOld);
+        let bNew = shift.map.get(bOld);
         if (aNew === undefined || bNew === undefined) continue;
+        // Greedy end: extend the range over lines inserted immediately after its
+        // last line, so appending a value under SUM(L1:L7) grows it to SUM(L1:L8)
+        // instead of leaving the new row out. (Bare L<n> refs are NOT greedy.)
+        const afterEnd = shift.map.get(bOld + 1);
+        if (afterEnd !== undefined && afterEnd - 1 > bNew) bNew = afterEnd - 1;
         if (aNew === aOld && bNew === bOld) continue;
         const lPrefix = m[0][0]; // 'L' or 'l'
         edits.push({
@@ -2410,6 +2495,34 @@ function toggleInlineFormat(marker: string) {
   ensureCaretLineVisible();
 }
 
+// Ctrl+K: wrap the selection as a markdown link `[text](url)` (Obsidian-style) and
+// park the caret inside the () to type/paste the URL. With no selection, insert an
+// empty `[]()` with the caret inside the [] to type the link text first.
+function insertLink() {
+  const value = editor.value;
+  const start = Math.min(editor.selectionStart, editor.selectionEnd);
+  const end = Math.max(editor.selectionStart, editor.selectionEnd);
+  const sel = value.slice(start, end);
+  captureForUndo();
+  const inserted = sel.length > 0 ? `[${sel}]()` : '[]()';
+  const caret = sel.length > 0 ? start + inserted.length - 1 : start + 1;  // inside () or []
+  editor.value = value.slice(0, start) + inserted + value.slice(end);
+  edSetSelection(caret, caret);
+  previousText = editor.value;
+  scheduleSave();
+  render();
+  ensureCaretLineVisible();
+}
+
+// If the caret column sits inside a `[text](url)` link on the given line, return its
+// URL (used for Ctrl/Cmd+click to open). Otherwise null.
+function linkUrlAtColumn(line: string, col: number): string | null {
+  for (const sp of parseInlineSpans(line)) {
+    if (sp.type === 'link' && sp.url && col >= sp.outerStart && col <= sp.outerEnd) return sp.url;
+  }
+  return null;
+}
+
 function onKeyDown(e: KeyboardEvent) {
   // Ctrl+T (new tab), Ctrl+W (close tab), Ctrl+L (rename current tab)
   if (e.ctrlKey && !e.altKey && !e.metaKey && !e.shiftKey) {
@@ -2435,6 +2548,7 @@ function onKeyDown(e: KeyboardEvent) {
     if (e.key === 'b' || e.key === 'B') { e.preventDefault(); toggleInlineFormat('**'); return; }
     if (e.key === 'i' || e.key === 'I') { e.preventDefault(); toggleInlineFormat('*'); return; }
     if (e.key === 'u' || e.key === 'U') { e.preventDefault(); toggleInlineFormat('__'); return; }
+    if (e.key === 'k' || e.key === 'K') { e.preventDefault(); insertLink(); return; }
   }
 
   // Ctrl+Shift+T reopens the most recently closed tab (browser-style, and
@@ -2913,6 +3027,7 @@ function render() {
   lastBulletRevealLine = bulletRevealLineNow();
   const caretCol = document.activeElement === editor ? caretColumnIndex() : -1;
   overlay.innerHTML = highlightNote(editor.value, lastResults, lineModes, activeToken, lastCaretLine, caretCol);
+  applyMarkerReveal();   // reveal the caret span's markers on the freshly-built layers
   layoutGutters();
   // Sync scroll AFTER rebuilding the overlay + gutters + result overlay — each
   // innerHTML assignment resets that layer's scrollTop to 0, so syncing earlier
@@ -3104,6 +3219,7 @@ function refreshCaretLineDisplay() {
   const caretCol = document.activeElement === editor ? caretColumnIndex() : -1;
   overlay.innerHTML = highlightNote(editor.value, lastResults, lineModes, activeToken, caretLine, caretCol);
   applyEditorConceal(caretLine);
+  applyMarkerReveal();
   const lines = editor.value.split('\n');
   const refGeometryChanged = [prev, caretLine].some(
     i => i >= 0 && i < lines.length && lineModeAt(i) === 'text' && /""[lL]\d+""/.test(lines[i])
@@ -4180,6 +4296,47 @@ function positionTooltipAt(anchor: HTMLElement) {
 function hideTooltip() {
   if (tooltipShowTimer) { window.clearTimeout(tooltipShowTimer); tooltipShowTimer = null; }
   hoverTooltip.hidden = true;
+}
+
+// Show the custom "Ctrl+Click to open" tooltip while the mouse is over a link's
+// text (an overlay .md-link). Only re-fires when the hovered link changes.
+let hoveredLinkEl: HTMLElement | null = null;
+function updateLinkHover(clientX: number, clientY: number) {
+  let found: HTMLElement | null = null;
+  const links = overlay.querySelectorAll<HTMLElement>('.md-link');
+  for (const el of links) {
+    const r = el.getBoundingClientRect();
+    if (clientX >= r.left && clientX <= r.right && clientY >= r.top && clientY <= r.bottom) { found = el; break; }
+  }
+  if (found === hoveredLinkEl) return;
+  hoveredLinkEl = found;
+  if (!found) { hideTooltip(); return; }
+  const url = found.dataset.href ?? '';
+  const mod = /mac/i.test(navigator.platform) ? '⌘' : 'Ctrl';
+  showTooltipHTML(found,
+    `<div class="tip-title">${mod} + Click to open</div>` + (url ? `<div class="tip-url">${escapeHtml(url)}</div>` : ''),
+    200);
+}
+
+// Give the editor a pointer cursor where a link is actionable: over the "open" icon
+// (always clickable), or over the link text while Ctrl/Cmd is held (Ctrl+click opens).
+// Otherwise leave the normal text caret so you can edit. The editor sits ON TOP of the
+// overlay, so its own cursor must be set here — the overlay's CSS cursor never shows.
+let lastLinkMouseX = -1, lastLinkMouseY = -1;
+function refreshLinkCursor(x: number, y: number, mod: boolean) {
+  const actionable = !!linkOpenIconAt(x, y) || (mod && !!hoveredLinkEl);
+  editor.style.cursor = actionable ? 'pointer' : '';
+}
+
+// The link's "open" icon (an overlay .md-link-open) under the given point, if any.
+// Padded a few px so the small icon is easy to hit.
+function linkOpenIconAt(x: number, y: number): HTMLElement | null {
+  const P = 3;
+  for (const el of overlay.querySelectorAll<HTMLElement>('.md-link-open')) {
+    const r = el.getBoundingClientRect();
+    if (x >= r.left - P && x <= r.right + P && y >= r.top - P && y <= r.bottom + P) return el;
+  }
+  return null;
 }
 
 // ============================================================

@@ -38,6 +38,7 @@ contextBridge.exposeInMainWorld('mathPopup', {
     ipcRenderer.invoke('window:setAlwaysOnTop', on),
   openSettings: (): Promise<void> => ipcRenderer.invoke('settings:open'),
   openHelp: (): Promise<void> => ipcRenderer.invoke('help:open'),
+  openExternal: (url: string): Promise<void> => ipcRenderer.invoke('shell:openExternal', url),
   copyText: (text: string) => clipboard.writeText(text),
   setZoomFactor: (factor: number) => webFrame.setZoomFactor(factor),
   onThemeChanged: (cb: (resolved: 'light' | 'dark') => void) => {
@@ -83,6 +84,7 @@ declare global {
       setAlwaysOnTop(on: boolean): Promise<void>;
       openSettings(): Promise<void>;
       openHelp(): Promise<void>;
+      openExternal(url: string): Promise<void>;
       copyText(text: string): void;
       setZoomFactor(factor: number): void;
       onThemeChanged(cb: (resolved: 'light' | 'dark') => void): () => void;
