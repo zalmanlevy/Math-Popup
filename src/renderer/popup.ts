@@ -452,6 +452,7 @@ async function init() {
   syncObsidianWatchers();
   render();
   editor.focus();
+  (window as unknown as { mathPopupWebReady?: () => void }).mathPopupWebReady?.();
 }
 
 // ============================================================
