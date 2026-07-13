@@ -156,7 +156,8 @@ self.addEventListener('fetch', (e) => {
   // with an old shim.js, crashing startup. Offline still falls back to the atomic
   // cache populated during install.
   const url = new URL(e.request.url);
-  const shellAsset = url.origin === self.location.origin && /\.(?:js|css)$/.test(url.pathname);
+  const shellAsset = url.origin === self.location.origin &&
+    (url.pathname.endsWith('.js') || url.pathname.endsWith('.css'));
   if (e.request.mode === 'navigate' || shellAsset) {
     e.respondWith(
       fetch(e.request).catch(() =>
