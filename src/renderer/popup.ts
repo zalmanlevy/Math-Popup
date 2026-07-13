@@ -524,8 +524,10 @@ function applyTheme(theme: ThemePref) {
 }
 
 function bindEvents() {
-  // Electron's native View-menu accelerator forwards Ctrl+Shift+B here.
-  window.mathPopup.onToggleTabBar(toggleTabBar);
+  // Electron forwards Ctrl+Shift+B here. Keep this optional because an existing
+  // PWA service worker can briefly pair a newly deployed popup bundle with the
+  // previous cached web shim, which did not expose this desktop-only hook.
+  window.mathPopup.onToggleTabBar?.(toggleTabBar);
 
   editor.addEventListener('input', onEditorInput);
   // Capture the scroll position before the browser mutates the DOM (and before

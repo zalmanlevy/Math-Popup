@@ -151,12 +151,17 @@ self.addEventListener('activate', (e) => {
 });
 self.addEventListener('fetch', (e) => {
   if (e.request.method !== 'GET') return;
-  // Page navigations: network-first so a fresh deploy's HTML wins; fall back to the
-  // cache, then to index.html (covers start_url query strings / offline cold launch).
-  if (e.request.mode === 'navigate') {
+  // Page navigations AND executable shell assets are network-first. Keeping JS/CSS
+  // cache-first allowed an activating iOS service worker to pair a new popup.js
+  // with an old shim.js, crashing startup. Offline still falls back to the atomic
+  // cache populated during install.
+  const url = new URL(e.request.url);
+  const shellAsset = url.origin === self.location.origin && /\.(?:js|css)$/.test(url.pathname);
+  if (e.request.mode === 'navigate' || shellAsset) {
     e.respondWith(
       fetch(e.request).catch(() =>
-        caches.match(e.request).then((r) => r || caches.match('/index.html'))
+        caches.match(e.request).then((r) => r ||
+          (e.request.mode === 'navigate' ? caches.match('/index.html') : Response.error()))
       )
     );
     return;
