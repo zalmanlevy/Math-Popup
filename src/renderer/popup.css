@@ -616,7 +616,11 @@ body {
 
 .line-gutter {
   text-align: right;
-  min-width: 38px;
+  /* Size to the longest visible label instead of reserving a roomy fixed
+     column. This adds only one character of width at L10, L100, etc. */
+  min-width: 0;
+  width: max-content;
+  padding: var(--editor-padding) 3px;
   border-right: 1px solid var(--border);
 }
 
@@ -639,7 +643,7 @@ body {
    instead of filling (and clipping at) the full gutter width. */
 .line-gutter .lnum {
   display: inline-block;
-  padding: 0 5px;
+  padding: 0 3px;
   border-radius: 5px;
   transition: background 90ms ease, color 90ms ease;
 }
@@ -651,7 +655,7 @@ body {
 .line-gutter .row::before {
   content: "";
   position: absolute;
-  right: -4px;                 /* just right of the (right-aligned) number, clear of its pill */
+  right: -1px;                 /* just right of the (right-aligned) number, inside the tighter gutter */
   top: calc(var(--line-height) * 0.35);
   bottom: calc(var(--line-height) * 0.35 - 2px);   /* a touch longer at the bottom */
   width: 1.5px;                /* same width for the short dots and the longer wrapped bars */
