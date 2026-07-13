@@ -74,6 +74,7 @@ window.mathPopup = {
     settingsCbs.add(cb);
     return () => { settingsCbs.delete(cb); };
   },
+  onToggleTabBar: () => () => {},
   getAppVersion: async () => __APP_VERSION__,
   getUpdateState: async () => ({ phase: 'idle' as const }),
   checkForUpdates: async () => { updateCbs.forEach((cb) => cb({ phase: 'not-available' })); },

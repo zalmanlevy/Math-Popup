@@ -93,6 +93,34 @@ body {
   color: var(--text-soft);
   font-size: 13px;
 }
+.help-search-wrap {
+  position: relative;
+  max-width: 420px;
+  margin: 0 0 22px;
+}
+.help-search {
+  width: 100%;
+  padding: 8px 88px 8px 11px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg-elev);
+  color: var(--text);
+  font: inherit;
+  outline: none;
+}
+.help-search:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+.help-search-status {
+  position: absolute;
+  right: 10px;
+  top: 50%;
+  transform: translateY(-50%);
+  color: var(--text-soft);
+  font-size: 11px;
+  pointer-events: none;
+}
 
 .toc {
   position: sticky;

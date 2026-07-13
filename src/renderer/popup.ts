@@ -392,6 +392,12 @@ const COPIED_ICON_HTML = `<svg class="copy-svg" viewBox="0 0 12 12" fill="none" 
 // their target lines.
 let previousText = '';
 
+// Preserve the exact editor state before a possible `//` shortcut begins. The
+// first slash still behaves like division (including auto-formatting); if the
+// very next keystroke is a second slash, we restore this state and insert both
+// slashes so formatting caused by the first one is cleanly reversed.
+let pendingFirstSlash: { text: string; caret: number; suffix: string } | null = null;
+
 async function init() {
   settings = await window.mathPopup.getSettings();
   pages = settings.pages || [];
@@ -418,12 +424,26 @@ async function init() {
   window.mathPopup.onThemeChanged(() => render());
   window.mathPopup.onSettingsChanged((updated) => {
     const advancedChanged = settings.advancedMode !== updated.advancedMode;
-    settings.advancedMode = updated.advancedMode;
-    settings.obsidianRecentNotes = updated.obsidianRecentNotes ?? [];
+    // The PWA opens Settings as a separate page. Apply every editor-facing
+    // preference from its BroadcastChannel update; copying only Advanced Mode
+    // left suffix expansion and number formatting stuck at their old values.
+    settings = {
+      ...settings,
+      advancedMode: updated.advancedMode,
+      autoFormatNumbers: updated.autoFormatNumbers,
+      expandSuffixesInEditor: updated.expandSuffixesInEditor,
+      suffixes: updated.suffixes,
+      decimals: updated.decimals,
+      theme: updated.theme,
+      zoomDefault: updated.zoomDefault,
+      obsidianRecentNotes: updated.obsidianRecentNotes ?? []
+    };
+    applyTheme(settings.theme);
     if (advancedChanged) {
       syncObsidianWatchers();
       refreshTabBar();
     }
+    render();
   });
   window.mathPopup.onObsidianFileChanged(handleObsidianFileChanged);
   updatePageIndicator();
@@ -504,6 +524,9 @@ function applyTheme(theme: ThemePref) {
 }
 
 function bindEvents() {
+  // Electron's native View-menu accelerator forwards Ctrl+Shift+B here.
+  window.mathPopup.onToggleTabBar(toggleTabBar);
+
   editor.addEventListener('input', onEditorInput);
   // Capture the scroll position before the browser mutates the DOM (and before
   // its native "keep caret visible" scroll), so onEditorInput can neutralize that
@@ -2578,6 +2601,10 @@ function handleLineBoundaryDelete(e: KeyboardEvent): boolean {
 }
 
 function onKeyDown(e: KeyboardEvent) {
+  const plainSlash = e.key === '/' && !e.ctrlKey && !e.altKey && !e.metaKey && !e.shiftKey;
+  if (plainSlash && handleSecondShortcutSlash(e)) return;
+  if (!plainSlash) pendingFirstSlash = null;
+
   // Ctrl+T (new tab), Ctrl+W (close tab), Ctrl+L (rename current tab)
   if (e.ctrlKey && !e.altKey && !e.metaKey && !e.shiftKey) {
     if (e.key === 't' || e.key === 'T') {
@@ -2651,6 +2678,14 @@ function onKeyDown(e: KeyboardEvent) {
 
   // "/math" or "/text" alone on a line → convert it (the word is stripped) when
   // the user presses Space or Enter.
+  // "//" + Space toggles the current line before number auto-formatting gets a
+  // chance to run, so `1234//` becomes `1234` without gaining a comma or space.
+  if (e.key === ' ' && !e.ctrlKey && !e.altKey && !e.metaKey && !e.shiftKey &&
+      handleModeToggleShortcut()) {
+    e.preventDefault();
+    return;
+  }
+
   if ((e.key === ' ' || e.key === 'Enter') && !e.ctrlKey && !e.altKey && !e.metaKey && !e.shiftKey &&
       handleModeCommand()) {
     e.preventDefault();
@@ -2855,6 +2890,63 @@ function handleModeCommand(): boolean {
   previousText = editor.value;
   padLineModes(editor.value);
   lineModes[idx] = m[2].toLowerCase() === 'math' ? 'math' : 'text';
+  const activePage = pages.find(p => p.id === activePageId);
+  if (activePage) activePage.lineModes = [...lineModes];
+  if (menuState.open) hideMenu();
+  scheduleSave();
+  render();
+  return true;
+}
+
+// Let the first slash go through normally. If another slash is typed
+// immediately after it, replace the formatted intermediate value with the
+// exact pre-slash value plus `//`. This keeps ordinary `1234/2` formatting as
+// `1,234/2`, while the shortcut remains `1234//` before Space toggles the mode.
+function handleSecondShortcutSlash(e: KeyboardEvent): boolean {
+  if (editor.selectionStart !== editor.selectionEnd) {
+    pendingFirstSlash = null;
+    return false;
+  }
+
+  const caret = editor.selectionStart;
+  if (pendingFirstSlash && caret > 0 && editor.value[caret - 1] === '/' &&
+      editor.value.slice(caret) === pendingFirstSlash.suffix) {
+    const first = pendingFirstSlash;
+    pendingFirstSlash = null;
+    editor.value = first.text.slice(0, first.caret) + '//' + first.text.slice(first.caret);
+    editor.selectionStart = editor.selectionEnd = first.caret + 2;
+    previousText = editor.value;
+    if (menuState.open) hideMenu();
+    scheduleSave();
+    render();
+    e.preventDefault();
+    return true;
+  }
+
+  pendingFirstSlash = {
+    text: editor.value,
+    caret,
+    suffix: editor.value.slice(caret)
+  };
+  return false;
+}
+
+// "//" immediately before the caret + Space: strip the slashes and toggle the
+// current line's mode. The trigger may follow other content, such as `1234//`.
+function handleModeToggleShortcut(): boolean {
+  if (editor.selectionStart !== editor.selectionEnd) return false;
+  const text = editor.value;
+  const caret = editor.selectionStart;
+  if (caret < 2 || text.slice(caret - 2, caret) !== '//') return false;
+
+  const idx = caretLineIndex();
+  const tokenStart = caret - 2;
+  captureForUndo();
+  editor.value = text.slice(0, tokenStart) + text.slice(caret);
+  editor.selectionStart = editor.selectionEnd = tokenStart;
+  previousText = editor.value;
+  padLineModes(editor.value);
+  lineModes[idx] = lineModes[idx] === 'math' ? 'text' : 'math';
   const activePage = pages.find(p => p.id === activePageId);
   if (activePage) activePage.lineModes = [...lineModes];
   if (menuState.open) hideMenu();

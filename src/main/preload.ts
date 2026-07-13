@@ -51,6 +51,11 @@ contextBridge.exposeInMainWorld('mathPopup', {
     ipcRenderer.on('settings:changed', listener);
     return () => ipcRenderer.removeListener('settings:changed', listener);
   },
+  onToggleTabBar: (cb: () => void) => {
+    const listener = () => cb();
+    ipcRenderer.on('tabs:toggle', listener);
+    return () => ipcRenderer.removeListener('tabs:toggle', listener);
+  },
   getAppVersion: (): Promise<string> => ipcRenderer.invoke('app:getVersion'),
   getUpdateState: (): Promise<UpdateState> => ipcRenderer.invoke('update:getState'),
   checkForUpdates: (): Promise<void> => ipcRenderer.invoke('update:check'),
@@ -89,6 +94,7 @@ declare global {
       setZoomFactor(factor: number): void;
       onThemeChanged(cb: (resolved: 'light' | 'dark') => void): () => void;
       onSettingsChanged(cb: (settings: Settings) => void): () => void;
+      onToggleTabBar(cb: () => void): () => void;
       getAppVersion(): Promise<string>;
       getUpdateState(): Promise<UpdateState>;
       checkForUpdates(): Promise<void>;

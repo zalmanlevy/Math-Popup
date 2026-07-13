@@ -47,6 +47,10 @@
   </nav>
 
   <main>
+    <div class="help-search-wrap">
+      <input id="help-search" class="help-search" type="search" placeholder="Search help…" aria-label="Search help" autocomplete="off" />
+      <span id="help-search-status" class="help-search-status" aria-live="polite"></span>
+    </div>
     <section id="overview">
       <h2>Overview</h2>
       <p>Math Popup is a small always-available notepad. By default every line is
@@ -89,7 +93,8 @@
       <p>Keep several independent notes open at once, each with its own content.
         Click <strong>📄</strong> in the header to toggle the tab bar that slides
         in just below the toolbar; whether it's expanded is remembered between
-        launches.</p>
+        launches. Press <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>B</kbd> to toggle it
+        from the keyboard.</p>
       <ul>
         <li><strong>Switch</strong> — click a tab, or cycle with
           <kbd>Ctrl</kbd>+<kbd>Tab</kbd> /
@@ -164,6 +169,10 @@
         <li>Type <code>/math</code> or <code>/text</code> on the line and press
           <kbd>Space</kbd> or <kbd>Enter</kbd> — the command word is removed and
           the line switches. (They're also in the slash menu.)</li>
+        <li>Type <code>//</code> anywhere on the line and press <kbd>Space</kbd>
+          to quickly toggle it between math and text. The <code>//</code> is
+          removed, and on math lines this shortcut does not trigger automatic
+          comma formatting.</li>
       </ul>
       <p><strong>The line number shows the type:</strong> math lines get a green,
         underlined number; the line your cursor is on is filled in (green for
@@ -659,11 +668,13 @@ AVERAGE(L1:L3)    → 20</code></pre>
           <tr><td><kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>Z</kbd> / <kbd>Ctrl</kbd>+<kbd>Y</kbd></td><td>Redo</td></tr>
           <tr><td><kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>C</kbd></td><td>Copy the current line's numeric result</td></tr>
           <tr><td><kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>M</kbd></td><td>Copy the whole note as markdown with results inline</td></tr>
+          <tr><td><kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>B</kbd></td><td>Show or hide the tab bar</td></tr>
           <tr><td><kbd>Ctrl</kbd>+<kbd>B</kbd> / <kbd>Ctrl</kbd>+<kbd>I</kbd> / <kbd>Ctrl</kbd>+<kbd>U</kbd></td><td>Bold / italic / underline the selection</td></tr>
           <tr><td><kbd>Ctrl</kbd>+<kbd>K</kbd></td><td>Turn the selection into a <code>[text](url)</code> link</td></tr>
           <tr><td><kbd>Ctrl</kbd>/<kbd>Cmd</kbd>+click a link</td><td>Open the link in your default browser (or click its ↗ icon)</td></tr>
           <tr><td><kbd>Tab</kbd></td><td>Math line: tidy the current number's commas and jump past it to a single trailing space, suffix included (<kbd>Space</kbd> in a number does the same). Text list item: indent it (<kbd>Shift</kbd>+<kbd>Tab</kbd> outdents)</td></tr>
           <tr><td><kbd>Enter</kbd></td><td>Continues a list item; the new line keeps the current line's math/text type</td></tr>
+          <tr><td><code>//</code> + <kbd>Space</kbd></td><td>Toggle the current line between math and text; the <code>//</code> is removed without adding a space or auto-formatting commas</td></tr>
           <tr><td><kbd>↑</kbd> / <kbd>↓</kbd> / <kbd>Enter</kbd></td><td>Navigate / confirm in the slash and L popups</td></tr>
           <tr><td><kbd>Esc</kbd></td><td>Close the Find bar or an open popup; otherwise hide the window</td></tr>
           <tr><td><kbd>Space</kbd> / operator / <kbd>Enter</kbd></td><td>Triggers auto-format and suffix expansion. In a number, <kbd>Space</kbd> also hops past it to a single trailing space (reusing one if it's already there) instead of adding a second</td></tr>

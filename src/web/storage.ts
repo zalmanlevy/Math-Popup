@@ -8,6 +8,7 @@ import { DEFAULT_SETTINGS, type Settings, type Mode } from '../shared/types';
 const DB_NAME = 'math-popup';
 const STORE = 'kv';
 const KEY = 'settings.v1';
+const LOCAL_KEY = 'math-popup.settings.v1';
 const CURRENT_SCHEMA = 1;
 
 let cache: Settings | null = null;
@@ -51,9 +52,27 @@ async function idbSet(key: string, value: unknown): Promise<void> {
   });
 }
 
-interface Envelope { schemaVersion: number; app: string; settings: Settings; }
+interface Envelope { schemaVersion: number; app: string; settings: Settings; savedAt?: number; }
 function envelope(settings: Settings): Envelope {
-  return { schemaVersion: CURRENT_SCHEMA, app: __APP_VERSION__, settings };
+  return { schemaVersion: CURRENT_SCHEMA, app: __APP_VERSION__, settings, savedAt: Date.now() };
+}
+
+// iPadOS can suspend a PWA before an IndexedDB transaction completes. Keep a
+// synchronous localStorage mirror and choose the newest valid copy on startup.
+// IndexedDB remains the primary large-capacity store; the mirror is a recovery
+// path for settings/navigation writes interrupted by suspension.
+function readLocalEnvelope(): Envelope | null {
+  try {
+    const raw = localStorage.getItem(LOCAL_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as Envelope;
+    return parsed?.settings ? parsed : null;
+  } catch { return null; }
+}
+
+function writeLocalEnvelope(env: Envelope): void {
+  try { localStorage.setItem(LOCAL_KEY, JSON.stringify(env)); }
+  catch (err) { console.warn('[math-popup] local settings mirror failed', err); }
 }
 // Forward-only migrations for future breaking schema changes (v1 -> v2 lands here).
 const migrations: Record<number, (s: Settings) => Settings> = {};
@@ -85,7 +104,17 @@ function normalize(s: Settings): Settings {
 // Returns the stored Settings, or null ONLY when the store is genuinely empty.
 // Throws on a real read error (so the caller can avoid treating it as first-run).
 async function readStored(): Promise<Settings | null> {
-  const env = await idbGet<Envelope>(KEY);
+  const localEnv = readLocalEnvelope();
+  let idbEnv: Envelope | undefined;
+  try {
+    idbEnv = await idbGet<Envelope>(KEY);
+  } catch (err) {
+    if (!localEnv) throw err;
+    console.warn('[math-popup] IndexedDB read failed; recovered settings from local mirror', err);
+  }
+  const env = localEnv && (!idbEnv || (localEnv.savedAt ?? 0) > (idbEnv.savedAt ?? 0))
+    ? localEnv
+    : idbEnv;
   if (!env) return null;
   if (env.schemaVersion > CURRENT_SCHEMA) return env.settings; // newer build wrote it; read as-is, don't migrate
   let s = env.settings;
@@ -117,6 +146,7 @@ export function getSettings(): Promise<Settings> {
     const result = normalize(seeded);
     if (!readFailed) {
       cache = result;
+      writeLocalEnvelope(envelope(result));
       // Genuine first run only — seed via the write chain so it's ordered with later writes.
       if (stored === null) writeChain = writeChain.then(() => idbSet(KEY, envelope(result))).catch(() => {});
     } else {
@@ -133,6 +163,7 @@ export async function setSettings(partial: Partial<Settings>): Promise<Settings>
   const base: Settings = cache ?? await getSettings();
   const merged: Settings = { ...base, ...partial }; // shallow merge — matches main/store.ts (pages replaced wholesale)
   cache = merged;
+  writeLocalEnvelope(envelope(merged));
   // Don't write while storage is known-unreadable; we'd risk clobbering data we
   // couldn't read. The change stays in memory; persistence resumes on a good read.
   if (!storageReadable) return merged;

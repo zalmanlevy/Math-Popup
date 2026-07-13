@@ -117,6 +117,7 @@ section code {
   font-size: 13px;
 }
 .row.toggle { cursor: pointer; }
+.about-version-row .hint { margin: 0; }
 .row input[type="number"] {
   margin-left: auto;
   width: 64px;

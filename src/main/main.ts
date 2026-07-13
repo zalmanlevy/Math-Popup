@@ -236,6 +236,18 @@ function createPopup() {
     }
   });
 
+  // On Windows/Chromium, Ctrl+Shift+B's B keydown is consumed before Electron
+  // exposes it, but the matching B keyup arrives with both modifiers intact.
+  // Toggle on that keyup so the shortcut works exactly once. Ctrl+T/W remain in
+  // their existing renderer handler and are not affected by this listener.
+  popupWindow.webContents.on('before-input-event', (event, input) => {
+    if (input.type === 'keyUp' && input.control && input.shift &&
+        !input.alt && !input.meta && input.key.toLowerCase() === 'b') {
+      event.preventDefault();
+      popupWindow?.webContents.send('tabs:toggle');
+    }
+  });
+
   popupWindow.loadFile(POPUP_HTML);
 
   popupWindow.once('ready-to-show', () => {
@@ -304,15 +316,36 @@ function togglePopup() {
   }
 }
 
+// Compute the final position before constructing an auxiliary native window.
+// On Windows, letting the OS choose an initial position can briefly expose a
+// DWM frame at that location even when the BrowserWindow starts hidden.
+function auxiliaryWindowBounds(width: number, height: number) {
+  const anchor = popupWindow && !popupWindow.isDestroyed()
+    ? popupWindow.getBounds()
+    : screen.getPrimaryDisplay().workArea;
+  const display = screen.getDisplayMatching(anchor);
+  const area = display.workArea;
+  const centerX = anchor.x + anchor.width / 2;
+  const centerY = anchor.y + anchor.height / 2;
+  return {
+    x: Math.round(Math.max(area.x, Math.min(centerX - width / 2, area.x + area.width - width))),
+    y: Math.round(Math.max(area.y, Math.min(centerY - height / 2, area.y + area.height - height)))
+  };
+}
+
 function openSettings() {
   if (settingsWindow && !settingsWindow.isDestroyed()) {
     settingsWindow.show();
     settingsWindow.focus();
     return;
   }
+  const size = { width: 540, height: 680 };
+  const position = auxiliaryWindowBounds(size.width, size.height);
   settingsWindow = new BrowserWindow({
-    width: 540,
-    height: 680,
+    show: false,
+    opacity: 0,
+    ...size,
+    ...position,
     title: 'Math Popup — Settings',
     backgroundColor: currentBg(),
     autoHideMenuBar: true,
@@ -324,6 +357,12 @@ function openSettings() {
       nodeIntegration: false
     }
   });
+  settingsWindow.once('ready-to-show', () => {
+    if (!settingsWindow || settingsWindow.isDestroyed()) return;
+    settingsWindow.show();
+    settingsWindow.setOpacity(1);
+    settingsWindow.focus();
+  });
   settingsWindow.loadFile(SETTINGS_HTML);
   settingsWindow.on('closed', () => { settingsWindow = null; });
 }
@@ -334,9 +373,13 @@ function openHelp() {
     helpWindow.focus();
     return;
   }
+  const size = { width: 720, height: 760 };
+  const position = auxiliaryWindowBounds(size.width, size.height);
   helpWindow = new BrowserWindow({
-    width: 720,
-    height: 760,
+    show: false,
+    opacity: 0,
+    ...size,
+    ...position,
     title: 'Math Popup — Help',
     backgroundColor: currentBg(),
     autoHideMenuBar: true,
@@ -347,6 +390,12 @@ function openHelp() {
       sandbox: false,
       nodeIntegration: false
     }
+  });
+  helpWindow.once('ready-to-show', () => {
+    if (!helpWindow || helpWindow.isDestroyed()) return;
+    helpWindow.show();
+    helpWindow.setOpacity(1);
+    helpWindow.focus();
   });
   helpWindow.loadFile(HELP_HTML);
   helpWindow.on('closed', () => { helpWindow = null; });
@@ -451,8 +500,9 @@ function registerIPC() {
   ipcMain.handle('update:check', () => triggerUpdateCheck());
   ipcMain.handle('update:install', () => {
     if (app.isPackaged) {
-      // isSilent = true, isForceRunAfter = true
-      autoUpdater.quitAndInstall(true, true);
+      // Show the NSIS installer so the user sees installation progress instead
+      // of watching the app disappear with no explanation. Relaunch afterward.
+      autoUpdater.quitAndInstall(false, true);
     }
   });
 
