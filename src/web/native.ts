@@ -3,10 +3,22 @@
 // the Capacitor native app — the browser/PWA build and the Electron desktop app
 // are untouched. Detection uses the bridge object the native runtime injects
 // into the webview before any page script runs.
+import { registerPlugin } from '@capacitor/core';
 import { StatusBar, Style } from '@capacitor/status-bar';
 import { Keyboard, KeyboardStyle } from '@capacitor/keyboard';
 import { Haptics, ImpactStyle } from '@capacitor/haptics';
 import { App as CapApp } from '@capacitor/app';
+
+// In-app native plugin (see ios/App/App/AppViewController.swift): reports
+// whether the app runs as a resizable iPadOS window instead of fullscreen.
+interface WindowStatePlugin {
+  get(): Promise<{ windowed: boolean }>;
+  addListener(
+    eventName: 'windowedchange',
+    listener: (state: { windowed: boolean }) => void
+  ): Promise<unknown>;
+}
+const WindowState = registerPlugin<WindowStatePlugin>('WindowState');
 
 interface CapacitorGlobal {
   isNativePlatform?: () => boolean;
@@ -59,4 +71,11 @@ export function initNativeShell(onHidden: () => void): void {
     .observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] });
   window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', syncNativeChrome);
   CapApp.addListener('appStateChange', ({ isActive }) => { if (!isActive) onHidden(); }).catch(() => {});
+  // iPadOS windowed mode: .cap-windowed drives the clearance for the window's
+  // traffic-light controls (title bar) and rounded corners / resize grip
+  // (footer). Pull on load — each page is a fresh document — then live-update.
+  const applyWindowed = (windowed: boolean) =>
+    document.documentElement.classList.toggle('cap-windowed', windowed);
+  WindowState.get().then(s => applyWindowed(s.windowed)).catch(() => {});
+  void WindowState.addListener('windowedchange', s => applyWindowed(s.windowed));
 }
