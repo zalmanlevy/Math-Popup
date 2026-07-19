@@ -101,6 +101,30 @@ body:has(> .web-back) header { padding-left: 52px; }
   padding-top: env(safe-area-inset-top);
   padding-bottom: env(safe-area-inset-bottom);
 }
+/* The footer is height:24px with border-box sizing, so the safe-area bottom
+   padding (home indicator) would squeeze its text instead of extending it —
+   grow the bar by the inset. */
+:root.cap-native .status-bar {
+  height: calc(24px + env(safe-area-inset-bottom));
+}
+
+/* ---- iPadOS windowed mode (resizable windows / Stage Manager) ---- */
+/* .cap-windowed is toggled by the native WindowState plugin. The window's
+   traffic-light controls sit in the top-leading corner; iPadOS is supposed to
+   report them through the top safe area but versions with the known overlay
+   bug report 0, so a floor keeps the title bar clear either way. */
+:root.cap-native.cap-windowed .title-bar {
+  height: calc(34px + max(env(safe-area-inset-top), 42px));
+  padding-top: max(env(safe-area-inset-top), 42px);
+}
+/* Rounded window corners clip flush content and the resize grip overlays the
+   bottom-right — give the footer breathing room on all three sides. */
+:root.cap-native.cap-windowed .status-bar {
+  height: calc(24px + max(env(safe-area-inset-bottom), 8px));
+  padding-bottom: max(env(safe-area-inset-bottom), 8px);
+  padding-left: 16px;
+  padding-right: 34px;
+}
 `;
 await writeFile(join(out, 'web.css'), WEB_CSS, 'utf8');
 
