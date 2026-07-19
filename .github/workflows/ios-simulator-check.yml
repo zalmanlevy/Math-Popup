@@ -1,0 +1,53 @@
+# Compiles the iOS app for the generic simulator, unsigned. This is how native
+# (Swift/Xcode project) changes get verified without a Mac or any signing
+# secrets — it catches Swift compile errors, broken project references, and
+# Capacitor/SPM resolution problems cheaply on PRs.
+name: iOS Simulator Check
+
+on:
+  pull_request:
+    paths:
+      - 'ios/**'
+      - 'capacitor.config.ts'
+      - 'package.json'
+      - 'package-lock.json'
+      - '.github/workflows/ios-simulator-check.yml'
+  workflow_dispatch:
+
+concurrency:
+  group: ios-sim-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-simulator:
+    runs-on: macos-26
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+        env:
+          ELECTRON_SKIP_BINARY_DOWNLOAD: '1'
+
+      - name: Build web bundle
+        run: npm run build:web
+
+      - name: Sync Capacitor iOS
+        run: |
+          npx cap sync ios
+          node scripts/fix-capacitor-ios-package.mjs
+
+      - name: Build for generic iOS simulator (unsigned)
+        run: |
+          xcodebuild build \
+            -project ios/App/App.xcodeproj \
+            -scheme App \
+            -configuration Debug \
+            -destination 'generic/platform=iOS Simulator' \
+            CODE_SIGNING_ALLOWED=NO

@@ -75,6 +75,32 @@ button, a, .icon-btn, .tab-chip, .seg-btn, .btn, .tab-bar-add, .tab-overflow-btn
 .web-back:active { background: rgba(127, 127, 127, 0.30); }
 /* Keep the settings/help heading clear of the fixed Back control. */
 body:has(> .web-back) header { padding-left: 52px; }
+
+/* ---- Native app shell (Capacitor iOS/iPadOS only; html gets .cap-native) ---- */
+/* Flatten the desktop floating-panel chrome: a border+radius+shadow around the
+   whole screen reads as a website inside a native window. The native webview is
+   edge-to-edge (viewport-fit=cover + contentInset 'never'), so CSS owns every
+   safe-area inset here. */
+:root.cap-native body {
+  border: none;
+  border-radius: 0;
+  box-shadow: none;
+  padding-left: env(safe-area-inset-left);
+  padding-right: env(safe-area-inset-right);
+}
+/* Notes page: the title bar extends up behind the status bar. */
+:root.cap-native .title-bar {
+  border-radius: 0;
+  height: calc(34px + env(safe-area-inset-top));
+  padding-top: env(safe-area-inset-top);
+}
+:root.cap-native .drag-handle { display: none; }  /* desktop window-drag affordance */
+/* Settings/help pages (no .title-bar): pad the page itself clear of the status
+   bar and the home indicator. */
+:root.cap-native body:not(:has(> .title-bar)) {
+  padding-top: env(safe-area-inset-top);
+  padding-bottom: env(safe-area-inset-bottom);
+}
 `;
 await writeFile(join(out, 'web.css'), WEB_CSS, 'utf8');
 

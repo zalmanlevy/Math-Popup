@@ -668,7 +668,38 @@ function bindEvents() {
   findNextBtn.addEventListener('click', () => { findNext(1); findInput.focus(); });
   findCloseBtn.addEventListener('click', () => closeFind());
 
-  window.addEventListener('resize', () => render());
+  // Desktop: full render per resize (unchanged). Web/native iPad: rAF-coalesced
+  // fast relayout so continuous window resizing stays smooth (see the
+  // "Window-resize rendering" block above).
+  window.addEventListener('resize', () => {
+    if (IS_WEB_SHELL) scheduleResizeRelayout();
+    else render();
+  });
+
+  // iPad/touch: two-finger pinch drives the app's own zoom (the same zoom as
+  // Ctrl+wheel / Ctrl+±). WebKit's proprietary gesture events fire for pinches
+  // in both Safari/PWA and the native app's webview; preventDefault stops the
+  // browser's page-zoom from fighting the app zoom. Desktop Electron never
+  // fires these, and the guard keeps its behavior untouched.
+  if (IS_WEB_SHELL) {
+    let gestureStartZoom: number | null = null;
+    window.addEventListener('gesturestart', (e: Event) => {
+      e.preventDefault();
+      gestureStartZoom = currentZoom;
+    });
+    window.addEventListener('gesturechange', (e: Event) => {
+      e.preventDefault();
+      if (gestureStartZoom === null) return;
+      const scale = (e as Event & { scale?: number }).scale;
+      if (typeof scale !== 'number' || !Number.isFinite(scale) || scale <= 0) return;
+      const next = clampZoom(gestureStartZoom * scale);
+      if (next !== currentZoom) applyZoom(next);
+    });
+    window.addEventListener('gestureend', (e: Event) => {
+      e.preventDefault();
+      gestureStartZoom = null;
+    });
+  }
 
   closeBtn.addEventListener('click', () => window.mathPopup.hidePopup());
   settingsBtn.addEventListener('click', () => window.mathPopup.openSettings());
@@ -710,8 +741,14 @@ function bindEvents() {
   wireOverflowTrigger(overflowBtn);
   overflowPopup.addEventListener('mouseenter', cancelHideOverflow);
   overflowPopup.addEventListener('mouseleave', scheduleHideOverflow);
-  // Re-evaluate which tabs overflow when the window is resized.
-  window.addEventListener('resize', () => { layoutTabs(); hideOverflowPopup(); hideTabContextMenu(); });
+  // Re-evaluate which tabs overflow when the window is resized. On the web/iPad
+  // shell layoutTabs runs inside the rAF-coalesced resize pass instead, so a
+  // resize burst doesn't force tab measurement per event.
+  window.addEventListener('resize', () => {
+    if (!IS_WEB_SHELL) layoutTabs();
+    hideOverflowPopup();
+    hideTabContextMenu();
+  });
   // Dismiss the tab right-click menu / dropdown on any outside click.
   document.addEventListener('mousedown', (e) => {
     const t = e.target as Node;
@@ -3202,6 +3239,68 @@ function syncScroll() {
     findLayer.scrollTop = editor.scrollTop;
     findLayer.scrollLeft = editor.scrollLeft;
   }
+}
+
+// ============================================================
+// Window-resize rendering
+// ------------------------------------------------------------
+// Desktop (Electron) keeps its original behavior: a resize event runs a full
+// render(). The web/native-iOS build (IS_WEB_SHELL, set by the web shim) gets a
+// fast path instead, because iPadOS resizes the window CONTINUOUSLY — Split
+// View divider drags, Stage Manager window resizing, rotation, and the
+// on-screen keyboard all stream resize events — and a full render (re-evaluate
+// every line + rebuild three layers' DOM) per event visibly stutters there.
+//
+// A window resize cannot change the text, the answers, or the answer-column
+// width (chip width depends only on the answers) — the ONLY thing that changes
+// is where lines wrap, i.e. each row's height. So per animation frame we
+// re-read the overlay's natural line heights and restyle the existing gutter /
+// result rows in place: no evaluation, no innerHTML, no listener re-binding.
+// One authoritative render() still runs once the burst settles, so anything a
+// height pass can't know about (find layer, measurements) trues itself up.
+// ============================================================
+const IS_WEB_SHELL = (window as unknown as { mathPopupIsWeb?: boolean }).mathPopupIsWeb === true;
+let resizeRaf = 0;
+let resizeSettleTimer: number | null = null;
+
+// Returns false when the cached layers don't match the current line count
+// (mid-edit rebuild race) — the caller falls back to a full render().
+function resizeRelayoutFast(): boolean {
+  const lineCount = editor.value.split('\n').length;
+  const overlayLines = overlay.children;
+  const gutterRows = lineGutter.children;
+  const resultRows = resultOverlay.children;
+  if (overlayLines.length !== lineCount ||
+      gutterRows.length !== lineCount ||
+      resultRows.length !== lineCount) return false;
+  const lineHeight = parseFloat(getComputedStyle(editor).lineHeight) || 22;
+  // Read every height first, then write, so the pass forces a single reflow.
+  const heights = new Array<number>(lineCount);
+  for (let i = 0; i < lineCount; i++) {
+    heights[i] = Math.max(lineHeight, (overlayLines[i] as HTMLElement).offsetHeight);
+  }
+  for (let i = 0; i < lineCount; i++) {
+    const h = `${heights[i]}px`;
+    (gutterRows[i] as HTMLElement).style.height = h;
+    (resultRows[i] as HTMLElement).style.height = h;
+  }
+  syncScroll();
+  return true;
+}
+
+function scheduleResizeRelayout() {
+  if (resizeRaf) return;                    // one pass per frame, however many events fire
+  resizeRaf = requestAnimationFrame(() => {
+    resizeRaf = 0;
+    if (resizeRelayoutFast()) layoutTabs();
+    else render();
+    if (resizeSettleTimer !== null) window.clearTimeout(resizeSettleTimer);
+    resizeSettleTimer = window.setTimeout(() => {
+      resizeSettleTimer = null;
+      render();
+      layoutTabs();
+    }, 200);
+  });
 }
 
 // Build the inline result overlay HTML: a green "= answer" pinned to the right
