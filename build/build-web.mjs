@@ -116,6 +116,135 @@ body:has(> .web-back) header { padding-left: 52px; }
   text-size-adjust: 100%;
 }
 
+/* ---- Native: app chrome is UI, not selectable text ---- */
+/* iOS long-press starts the text-selection loupe on ANY selectable text, which
+   fights the synthesized context-menu long-press on tabs / the new-tab button
+   (half the time it selected the tab's words instead of opening its menu).
+   The notes page outside the editor is all chrome — kill selection there;
+   the editor and real inputs stay selectable. (-webkit-user-select inherits.) */
+:root.cap-native body:has(> .title-bar) {
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-touch-callout: none;
+}
+:root.cap-native .editor,
+:root.cap-native input,
+:root.cap-native textarea {
+  -webkit-user-select: text;
+  user-select: text;
+  -webkit-touch-callout: default;
+}
+
+/* ---- Native editor scrolling: one scroller, all layers move as one ---- */
+/* Desktop scrolls the contenteditable and JS mirrors its scrollTop onto the
+   overlay/gutter layers per scroll event. On iOS the finger-driven scroll runs
+   on the compositor while that mirroring runs on the main thread, so the
+   visible text lags the finger and momentum feels off. Natively the SHELL is
+   the one scroller: the editor becomes an in-flow, full-content-height child
+   (it sizes .editor-stack; the absolutely-positioned layers stretch with it),
+   the gutter column stretches alongside, and scrolling is a single composited
+   move — native momentum, rubber-band, scrollbar and caret-follow included.
+   popup.js routes every scroll read/write through the shell (scrollHost). */
+:root.cap-native .editor-shell {
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
+}
+:root.cap-native .editor-stack {
+  overflow: visible;
+  /* Size to the note, not the shell viewport: the stack (and the stretched
+     gutter column beside it) must span the full scrollable content so their
+     backgrounds and absolutely-positioned layers cover every scrolled line. */
+  height: max-content;
+  min-height: 100%;
+  display: flex;
+  flex-direction: column;
+}
+:root.cap-native .editor {
+  position: relative;
+  inset: auto;
+  height: auto;
+  flex: 1 0 auto;
+  overflow: visible;
+  /* Overscroll room past the last line — the note can always be scrolled a few
+     extra lines up, so the line being written never hugs the keyboard/footer. */
+  padding-bottom: clamp(120px, 25vh, 260px);
+}
+:root.cap-native .syntax-overlay,
+:root.cap-native .result-overlay,
+:root.cap-native .find-layer {
+  overflow: visible;
+}
+:root.cap-native .line-gutter { overflow: visible; }
+
+/* ---- Native settings/help pages: the page body scrolls itself ---- */
+/* The webview's own scrolling is disabled app-wide (that's what pins the notes
+   header), which also froze these document-scrolling pages — the help page
+   could not scroll at all. Make body an internal scroller. html must be
+   overflow:hidden or the body's overflow would propagate to the (disabled)
+   viewport scroller instead of scrolling the body element itself. */
+:root.cap-native { overflow: hidden; }
+:root.cap-native body:not(:has(> .title-bar)) {
+  height: 100dvh;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
+}
+
+/* ---- Native help page: sidebar TOC becomes a slide-in Contents drawer ---- */
+:root.cap-native body:has(> nav.toc) { display: block; }  /* drop the 220px grid column */
+:root.cap-native nav.toc {
+  position: fixed;
+  top: 0;
+  left: 0;
+  bottom: 0;
+  width: min(300px, 82vw);
+  max-height: none;
+  padding-top: calc(env(safe-area-inset-top) + 56px);
+  padding-bottom: calc(env(safe-area-inset-bottom) + 16px);
+  background: var(--bg-elev);
+  border-right: 1px solid var(--border);
+  box-shadow: 0 0 28px rgba(0, 0, 0, 0.28);
+  z-index: 95;
+  transform: translateX(-105%);
+  transition: transform 200ms ease;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+}
+:root.cap-native.toc-open nav.toc { transform: translateX(0); }
+:root.cap-native .toc-scrim { display: none; }
+:root.cap-native.toc-open .toc-scrim {
+  display: block;
+  position: fixed;
+  inset: 0;
+  z-index: 94;
+  background: rgba(0, 0, 0, 0.32);
+}
+/* The drawer toggle sits beside the Back control (web-back is at left 10px). */
+:root.cap-native .toc-toggle {
+  position: fixed;
+  top: calc(env(safe-area-inset-top) + 8px);
+  left: 54px;
+  z-index: 100;
+  width: 34px;
+  height: 34px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  border-radius: 8px;
+  font-size: 17px;
+  line-height: 1;
+  color: inherit;
+  background: rgba(127, 127, 127, 0.16);
+}
+:root.cap-native .toc-toggle:active { background: rgba(127, 127, 127, 0.30); }
+/* Windowed mode shifts the Back control right of the window controls; follow it. */
+:root.cap-native.cap-windowed .toc-toggle { left: 120px; }
+/* Room for both fixed controls above the heading. */
+:root.cap-native body:has(> nav.toc) header { padding-left: 96px; }
+:root.cap-native.cap-windowed body:has(> nav.toc) header { padding-left: 162px; }
+
 /* ---- iPadOS windowed mode (resizable windows / Stage Manager) ---- */
 /* .cap-windowed is toggled by the native WindowState plugin. Per Apple's
    iPadOS 26 guidance, toolbar content shares the top row with the
@@ -202,6 +331,10 @@ body:has(> .web-back) header { padding-left: 52px; }
   font-family: var(--font-mono);
 }
 .kb-key:active { background: var(--bg-soft); }
+/* ABC-mode markdown keys: styled like what they produce. */
+.kb-key.kb-b { font-family: var(--font-ui); font-weight: 800; }
+.kb-key.kb-i { font-family: var(--font-ui); font-style: italic; }
+.kb-key.kb-u { font-family: var(--font-ui); text-decoration: underline; text-underline-offset: 2px; }
 .kb-left { display: flex; align-items: center; gap: 8px; flex: 0 0 auto; }
 .kb-key-space {
   flex: 0 0 56px;

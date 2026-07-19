@@ -85,5 +85,8 @@ export function initNativeShell(onHidden: () => void): void {
   const applyWindowed = (windowed: boolean) =>
     document.documentElement.classList.toggle('cap-windowed', windowed);
   WindowState.get().then(s => applyWindowed(s.windowed)).catch(() => {});
-  void WindowState.addListener('windowedchange', s => applyWindowed(s.windowed));
+  // catch: never surface a bridge rejection — the inline bootstrap guard treats
+  // an unhandled one as a failed startup and unhides the fallback editor text.
+  WindowState.addListener('windowedchange', s => applyWindowed(s.windowed))
+    .then(() => {}, () => {});
 }

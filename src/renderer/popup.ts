@@ -29,6 +29,20 @@ const findCount = document.getElementById('find-count') as HTMLSpanElement;
 const findPrevBtn = document.getElementById('find-prev') as HTMLButtonElement;
 const findNextBtn = document.getElementById('find-next') as HTMLButtonElement;
 const findCloseBtn = document.getElementById('find-close') as HTMLButtonElement;
+const editorShell = document.querySelector('.editor-shell') as HTMLElement;
+
+// True only inside the Capacitor iOS/iPadOS app (the web shim adds the class
+// before this bundle runs; Electron and the plain web build never have it).
+const IS_CAP_NATIVE = document.documentElement.classList.contains('cap-native');
+
+// The editor's vertical scroll container. Desktop/web: the editor element
+// itself scrolls and syncScroll() mirrors its scrollTop onto the overlay and
+// gutter layers each scroll event. Native iOS: that mirroring runs on the main
+// thread while the finger-driven scroll runs on the compositor, so the visible
+// (overlay) text lags the finger. There the .editor-shell scrolls ALL layers
+// as one block instead (see web.css) and no mirroring exists. Every scroll
+// read/write below goes through scrollHost so both worlds share the code.
+const scrollHost: HTMLElement = IS_CAP_NATIVE ? editorShell : (editor as unknown as HTMLElement);
 
 // ============================================================
 // Contenteditable editor engine (per-line blocks)
@@ -304,7 +318,7 @@ function onEditorInput() {
   // a plain edit (e.g. Backspace) doesn't shift the view. ensureCaretLineVisible
   // (run inside onInput) is then the sole authority on scrolling — it nudges only
   // when the caret line genuinely falls outside the viewport.
-  editor.scrollTop = scrollBeforeInput;
+  scrollHost.scrollTop = scrollBeforeInput;
   onInput();                    // existing pipeline: refs, undo, render(), menus
 }
 
@@ -537,12 +551,12 @@ function bindEvents() {
   // Capture the scroll position before the browser mutates the DOM (and before
   // its native "keep caret visible" scroll), so onEditorInput can neutralize that
   // jump. Fires for typing, deletion, and paste alike.
-  editor.addEventListener('beforeinput', () => { scrollBeforeInput = editor.scrollTop; });
+  editor.addEventListener('beforeinput', () => { scrollBeforeInput = scrollHost.scrollTop; });
   // IME: don't normalize the DOM mid-composition (it would cancel the IME);
   // process once on compositionend.
   editor.addEventListener('compositionstart', () => { edComposing = true; });
   editor.addEventListener('compositionend', () => { edComposing = false; onEditorInput(); });
-  editor.addEventListener('scroll', syncScroll);
+  scrollHost.addEventListener('scroll', syncScroll);
   editor.addEventListener('mousedown', maybeToggleTaskCheckboxFromMouse);
   editor.addEventListener('keydown', onKeyDown);
   editor.addEventListener('blur', () => {
@@ -700,7 +714,12 @@ function bindEvents() {
       lpTimer = window.setTimeout(() => {
         lpTimer = null;
         lpFired = true;
-        (lpTarget as HTMLElement | null)?.dispatchEvent(new MouseEvent('contextmenu', {
+        // A render between touch-down and now can have rebuilt the pressed
+        // element (tabs re-render on layout passes); a detached target's event
+        // never reaches the delegated listeners, so re-resolve at the point.
+        const pressed = lpTarget as HTMLElement | null;
+        const target = pressed?.isConnected ? pressed : document.elementFromPoint(lpX, lpY);
+        target?.dispatchEvent(new MouseEvent('contextmenu', {
           bubbles: true, cancelable: true, view: window, clientX: lpX, clientY: lpY,
         }));
       }, 500);
@@ -1357,13 +1376,13 @@ function ensureCaretLineVisible() {
   const lineTop = coords.top;
   const lineBot = lineTop + lineHeight;
 
-  const viewTop = editor.scrollTop;
-  const viewBot = viewTop + editor.clientHeight;
+  const viewTop = scrollHost.scrollTop;
+  const viewBot = viewTop + scrollHost.clientHeight;
 
   if (lineBot > viewBot) {
-    editor.scrollTop = lineBot - editor.clientHeight;
+    scrollHost.scrollTop = lineBot - scrollHost.clientHeight;
   } else if (lineTop < viewTop) {
-    editor.scrollTop = lineTop;
+    scrollHost.scrollTop = lineTop;
   }
   // Keep the overlays aligned with whatever scroll position we just landed on.
   syncScroll();
@@ -1447,7 +1466,7 @@ function queueObsidianSave(page: Page | undefined, content: string, immediate = 
 function applyObsidianContent(page: Page, content: string) {
   const oldStart = editor.selectionStart;
   const oldEnd = editor.selectionEnd;
-  const oldScroll = editor.scrollTop;
+  const oldScroll = scrollHost.scrollTop;
   page.content = content;
   page.lineModes = fitLineModesToText(page.lineModes, content);
 
@@ -1461,7 +1480,7 @@ function applyObsidianContent(page: Page, content: string) {
       const caretEnd = Math.min(oldEnd, content.length);
       editor.selectionStart = caretStart;
       editor.selectionEnd = caretEnd;
-      editor.scrollTop = oldScroll;
+      scrollHost.scrollTop = oldScroll;
       render();
     } finally {
       applyingObsidianChange = false;
@@ -3281,6 +3300,10 @@ function render() {
 }
 
 function syncScroll() {
+  // Native: nothing scrolls internally — the .editor-shell scrolls every layer
+  // as one block, so there is nothing to mirror (and the layers' scrollTop is
+  // meaningless, their content height equals their box height).
+  if (IS_CAP_NATIVE) return;
   overlay.scrollTop = editor.scrollTop;
   overlay.scrollLeft = editor.scrollLeft;
   // Keep gutters in vertical sync with the editor's scroll.
@@ -3367,7 +3390,6 @@ function scheduleResizeRelayout() {
 // expands. Visibility is CSS-driven by .kb-open (native keyboard events), so
 // a hardware keyboard never shows the bar.
 // ============================================================
-const IS_CAP_NATIVE = document.documentElement.classList.contains('cap-native');
 type KbMode = 'numeric' | 'text';
 let kbMode: KbMode = 'numeric';
 let kbBar: HTMLDivElement | null = null;
@@ -3415,8 +3437,13 @@ function setKeyboardMode(mode: KbMode) {
   // iOS picks the keyboard from inputmode at focus time only, so switching
   // while typing needs a quick blur/refocus (selection preserved).
   ed.setAttribute('inputmode', mode === 'numeric' ? 'decimal' : 'text');
+  // ABC is the writing mode: iOS autocorrect + sentence caps on. 123 keeps
+  // both off so math is never "corrected". Applied by the same refocus.
+  ed.setAttribute('autocorrect', mode === 'text' ? 'on' : 'off');
+  ed.setAttribute('autocapitalize', mode === 'text' ? 'sentences' : 'off');
   kbBar?.querySelectorAll<HTMLElement>('.kb-seg').forEach(b =>
     b.classList.toggle('active', b.dataset.kb === mode));
+  renderKbKeys();
   if (document.activeElement === editor) {
     const s = editor.selectionStart;
     const e = editor.selectionEnd;
@@ -3428,12 +3455,44 @@ function setKeyboardMode(mode: KbMode) {
   }
 }
 
+// The bar's key row follows the keyboard mode. 123: the operators the
+// on-screen number pad lacks plus the k/m suffixes. ABC: the markdown this
+// app renders (headings, lists, checkboxes, bold/italic/underline, links) —
+// plus ( ) and /, kept in both modes so the slash command menu and simple
+// grouping stay one tap away while writing.
+// data-ins keys insert text at the caret; data-act keys run the same commands
+// as the desktop shortcuts (Ctrl+B/I/U/K), so selection wrap/unwrap works.
+const KB_MATH_KEYS: Array<[label: string, insert: string]> = [
+  ['+', '+'], ['−', '-'], ['×', '*'], ['÷', '/'], ['^', '^'], ['/', '/'],
+  ['(', '('], [')', ')'], ['%', '%'], ['=', '='],
+  ['k', 'k'], ['m', 'm'],
+];
+const KB_TEXT_KEYS: Array<[label: string, insOrAct: string, isAction?: boolean, cls?: string]> = [
+  ['#', '# '], ['•', '- '], ['1.', '1. '], ['☐', '- [ ] '],
+  ['B', 'bold', true, 'kb-b'], ['I', 'italic', true, 'kb-i'],
+  ['U', 'underline', true, 'kb-u'], ['🔗', 'link', true],
+  ['(', '('], [')', ')'], ['/', '/'],
+];
+
+function renderKbKeys() {
+  const keysEl = kbBar?.querySelector<HTMLElement>('.kb-keys');
+  if (!keysEl) return;
+  keysEl.innerHTML = kbMode === 'numeric'
+    ? KB_MATH_KEYS.map(([label, ins]) =>
+        `<button type="button" class="kb-key" data-ins="${escapeAttr(ins)}">${escapeHtml(label)}</button>`).join('')
+    : KB_TEXT_KEYS.map(([label, val, isAction, cls]) =>
+        `<button type="button" class="kb-key${cls ? ' ' + cls : ''}" data-${isAction ? 'act' : 'ins'}="${escapeAttr(val)}">${escapeHtml(label)}</button>`).join('');
+}
+
+function runKbAction(act: string) {
+  if (document.activeElement !== editor) editor.focus();
+  if (act === 'bold') toggleInlineFormat('**');
+  else if (act === 'italic') toggleInlineFormat('*');
+  else if (act === 'underline') toggleInlineFormat('__');
+  else if (act === 'link') insertLink();
+}
+
 function initMathKeyboardBar() {
-  const KEYS: Array<[label: string, insert: string]> = [
-    ['+', '+'], ['−', '-'], ['×', '*'], ['÷', '/'], ['^', '^'], ['/', '/'],
-    ['(', '('], [')', ')'], ['%', '%'], ['=', '='],
-    ['k', 'k'], ['m', 'm'],
-  ];
   kbBar = document.createElement('div');
   kbBar.className = 'kb-bar';
   // Left cluster: the 123/ABC toggle with the space key — side by side on wide
@@ -3448,10 +3507,7 @@ function initMathKeyboardBar() {
     `<span class="kb-space-word">space</span><span class="kb-space-sym" aria-hidden="true"></span>` +
     `</button>` +
     `</div>` +
-    `<div class="kb-keys">` +
-    KEYS.map(([label, ins]) =>
-      `<button type="button" class="kb-key" data-ins="${ins}">${label}</button>`).join('') +
-    `</div>`;
+    `<div class="kb-keys"></div>`;
   document.body.appendChild(kbBar);
   // Same trick as the line gutter: swallow mousedown so tapping a key never
   // steals focus (and never dismisses the keyboard); click still fires.
@@ -3461,6 +3517,7 @@ function initMathKeyboardBar() {
     const seg = t.closest<HTMLElement>('.kb-seg');
     if (seg?.dataset.kb) { setKeyboardMode(seg.dataset.kb as KbMode); return; }
     const key = t.closest<HTMLElement>('.kb-key');
+    if (key?.dataset.act) { runKbAction(key.dataset.act); return; }
     if (key?.dataset.ins) insertSnippetAtCaret(key.dataset.ins);
   });
   // Show the bar the moment the editor is focused — waiting for the native
@@ -4200,12 +4257,17 @@ function confirmMenuSelection() {
   if (!item) { hideMenu(); return; }
   if (item.action) {
     // Action commands replace the entire trigger fragment with nothing
-    // (the action is responsible for any editor mutation).
+    // (the action handles its own further editor mutation).
     const fragmentEnd = editor.selectionStart;
     const newText = editor.value.slice(0, menuState.triggerStart) + editor.value.slice(fragmentEnd);
     editor.value = newText;
     editor.selectionStart = editor.selectionEnd = menuState.triggerStart;
     previousText = editor.value;
+    // Commit the fragment removal itself: an action may bail without touching
+    // the editor (e.g. /clear on a note that only contained the "/"), and then
+    // the overlay would keep showing the removed trigger text unsaved forever.
+    scheduleSave();
+    render();
     hideMenu();
     item.action();
     return;
@@ -4472,8 +4534,10 @@ function renderFindLayer() {
     return;
   }
   findLayer.innerHTML = buildFindLayerHtml(editor.value, findMatches, findCurrent);
-  findLayer.scrollTop = editor.scrollTop;
-  findLayer.scrollLeft = editor.scrollLeft;
+  if (!IS_CAP_NATIVE) {
+    findLayer.scrollTop = editor.scrollTop;
+    findLayer.scrollLeft = editor.scrollLeft;
+  }
 }
 
 // Render the whole note as plain (transparent) text with a <mark> around each
@@ -4518,10 +4582,10 @@ function scrollToCurrentMatch() {
   const top = markEl.offsetTop;
   const bottom = top + markEl.offsetHeight;
   const pad = 28;
-  if (top < editor.scrollTop + pad) {
-    editor.scrollTop = Math.max(0, top - pad);
-  } else if (bottom > editor.scrollTop + editor.clientHeight - pad) {
-    editor.scrollTop = bottom - editor.clientHeight + pad;
+  if (top < scrollHost.scrollTop + pad) {
+    scrollHost.scrollTop = Math.max(0, top - pad);
+  } else if (bottom > scrollHost.scrollTop + scrollHost.clientHeight - pad) {
+    scrollHost.scrollTop = bottom - scrollHost.clientHeight + pad;
   }
   syncScroll();
 }

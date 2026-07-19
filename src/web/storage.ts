@@ -4,6 +4,7 @@
 // network, no login — everything lives in the user's browser, mirroring the desktop
 // app's local settings.json.
 import { DEFAULT_SETTINGS, type Settings, type Mode } from '../shared/types';
+import { isNativeApp } from './native';
 
 const DB_NAME = 'math-popup';
 const STORE = 'kv';
@@ -120,14 +121,22 @@ function withTimeout<T>(p: Promise<T>, ms: number): Promise<T> {
 async function readStored(): Promise<Settings | null> {
   const localEnv = readLocalEnvelope();
   let idbEnv: Envelope | undefined;
+  // The mirror is written synchronously BEFORE every debounced IndexedDB write
+  // and refreshed after every successful read, so it is never older than the
+  // IndexedDB copy. In the native app IndexedDB reliably WEDGES (open/get
+  // never settles) on the second page loaded under the capacitor:// scheme —
+  // settings.html, or index.html after navigating back — so there the mirror
+  // is authoritative and IndexedDB isn't consulted at all: waiting even a
+  // bounded 1.2s made every settings round-trip feel hung. The browser/PWA
+  // keeps the bounded read (its localStorage can be evicted independently).
   try {
-    // The mirror is written synchronously BEFORE every debounced IndexedDB
-    // write and refreshed after every successful read, so it is never older
-    // than the IndexedDB copy — when it exists, a hung IndexedDB read may be
-    // abandoned in its favor. With no mirror (true first run) wait fully.
-    idbEnv = localEnv
-      ? await withTimeout(idbGet<Envelope>(KEY), 1200)
-      : await idbGet<Envelope>(KEY);
+    if (localEnv && isNativeApp) {
+      idbEnv = undefined;
+    } else if (localEnv) {
+      idbEnv = await withTimeout(idbGet<Envelope>(KEY), 1200);
+    } else {
+      idbEnv = await idbGet<Envelope>(KEY);
+    }
   } catch (err) {
     if (!localEnv) throw err;
     console.warn('[math-popup] IndexedDB read failed or hung; recovered settings from local mirror', err);

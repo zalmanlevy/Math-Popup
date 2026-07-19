@@ -8,6 +8,34 @@ async function init() {
   window.mathPopup.onThemeChanged(() => { /* CSS reacts via media query */ });
   setupTocHighlight();
   setupHelpSearch();
+  setupNativeToc();
+}
+
+// Native iOS app only (html gets .cap-native from the web shim): the fixed
+// 220px sidebar left no room to read on phones and skinny iPad windows, so the
+// TOC becomes a slide-in drawer behind a ☰ button next to the Back control.
+// CSS for all of it lives in web.css; desktop and the plain web build never
+// have the class and keep the sidebar.
+function setupNativeToc() {
+  if (!document.documentElement.classList.contains('cap-native')) return;
+  const toc = document.querySelector<HTMLElement>('nav.toc');
+  if (!toc) return;
+  const root = document.documentElement;
+  const btn = document.createElement('button');
+  btn.type = 'button';
+  btn.className = 'toc-toggle';
+  btn.setAttribute('aria-label', 'Contents');
+  btn.textContent = '☰';
+  const scrim = document.createElement('div');
+  scrim.className = 'toc-scrim';
+  const close = () => root.classList.remove('toc-open');
+  btn.addEventListener('click', () => root.classList.toggle('toc-open'));
+  scrim.addEventListener('click', close);
+  // Picking a section closes the drawer so the jump target is visible.
+  toc.addEventListener('click', (e) => {
+    if ((e.target as HTMLElement).closest('a')) close();
+  });
+  document.body.append(btn, scrim);
 }
 
 function setupHelpSearch() {
