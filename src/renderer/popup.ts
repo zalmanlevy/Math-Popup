@@ -3382,6 +3382,13 @@ function insertSnippetAtCaret(text: string) {
     ensureCaretLineVisible();
     return;
   }
+  // Slash menu open: the bar's space key confirms the highlighted command,
+  // like Enter (mirrors handleMenuKey's space handling for real keystrokes).
+  if (text === ' ' && menuState.open && menuState.kind === 'slash' && menuState.filtered.length > 0) {
+    confirmMenuSelection();
+    ensureCaretLineVisible();
+    return;
+  }
   const start = editor.selectionStart;
   const end = editor.selectionEnd;
   const value = editor.value;
@@ -3395,6 +3402,11 @@ function insertSnippetAtCaret(text: string) {
   if (text === ' ' || /^[+\-*/^=()]$/.test(text)) maybeAutoFormat(text);
   scheduleSave();
   render();
+  // The typed-input path runs the menu logic on every keystroke; bar keys must
+  // too, or the "/" key can never open the slash menu — and on iOS the number
+  // pad has no "/" of its own, leaving the menu unreachable. Letters typed
+  // after it filter via the normal input path.
+  updateMenuFromCaret();
   ensureCaretLineVisible();
 }
 
@@ -4152,6 +4164,16 @@ function handleMenuKey(e: KeyboardEvent): boolean {
     }
     hideMenu();
     return false;
+  }
+  // Web/iOS: Space also confirms in the slash menu (touch keyboards make
+  // Enter awkward to reach mid-thought). Desktop keeps its exact behavior
+  // (space closes the menu by typing a space). Slash only — in variable
+  // completion a space must end the identifier, never accept a completion.
+  if (e.key === ' ' && IS_WEB_SHELL && menuState.kind === 'slash' &&
+      !e.ctrlKey && !e.metaKey && !e.altKey && menuState.filtered.length > 0) {
+    e.preventDefault();
+    confirmMenuSelection();
+    return true;
   }
   if (e.key === 'Escape') {
     e.preventDefault();
