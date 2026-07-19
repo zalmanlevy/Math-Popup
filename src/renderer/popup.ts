@@ -3361,20 +3361,27 @@ function setKeyboardMode(mode: KbMode) {
 
 function initMathKeyboardBar() {
   const KEYS: Array<[label: string, insert: string]> = [
-    ['+', '+'], ['−', '-'], ['×', '*'], ['÷', '/'], ['/', '/'],
-    ['(', '('], [')', ')'], ['space', ' '], ['%', '%'], ['=', '='],
+    ['+', '+'], ['−', '-'], ['×', '*'], ['÷', '/'], ['^', '^'], ['/', '/'],
+    ['(', '('], [')', ')'], ['%', '%'], ['=', '='],
     ['k', 'k'], ['m', 'm'],
   ];
   kbBar = document.createElement('div');
   kbBar.className = 'kb-bar';
+  // Left cluster: the 123/ABC toggle with the space key — side by side on wide
+  // bars, stacked (toggle over an equally wide space) on narrow two-row bars.
   kbBar.innerHTML =
+    `<div class="kb-left">` +
     `<div class="kb-toggle" role="group" aria-label="Keyboard type">` +
     `<button type="button" class="kb-seg" data-kb="numeric">123</button>` +
     `<button type="button" class="kb-seg" data-kb="text">ABC</button>` +
     `</div>` +
+    `<button type="button" class="kb-key kb-key-space" data-ins=" ">` +
+    `<span class="kb-space-word">space</span><span class="kb-space-sym">&#x2423;</span>` +
+    `</button>` +
+    `</div>` +
     `<div class="kb-keys">` +
     KEYS.map(([label, ins]) =>
-      `<button type="button" class="kb-key${label === 'space' ? ' kb-key-space' : ''}" data-ins="${ins}">${label}</button>`).join('') +
+      `<button type="button" class="kb-key" data-ins="${ins}">${label}</button>`).join('') +
     `</div>`;
   document.body.appendChild(kbBar);
   // Same trick as the line gutter: swallow mousedown so tapping a key never

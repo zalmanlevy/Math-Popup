@@ -194,17 +194,33 @@ body:has(> .web-back) header { padding-left: 52px; }
   font-family: var(--font-mono);
 }
 .kb-key:active { background: var(--bg-soft); }
+.kb-left { display: flex; align-items: center; gap: 8px; flex: 0 0 auto; }
 .kb-key-space {
-  flex: 1.8 0 52px;
-  font-size: 11px;
-  font-family: var(--font-ui);
-  color: var(--text-soft);
+  flex: 0 0 56px;
+  min-width: 56px;
+  display: inline-flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 2px 0;
 }
+.kb-space-word {
+  font-size: 8px;
+  line-height: 1;
+  font-family: var(--font-ui);
+  color: var(--text-faint);
+  letter-spacing: 0.05em;
+}
+.kb-space-sym { font-size: 14px; line-height: 1.1; }
 /* Narrow (iPhone portrait, skinny iPad windows): two fixed rows of six keys —
-   every key visible and in a stable position, no scrolling. The 123/ABC
-   toggle sits to the left, vertically centered across both rows. */
+   every key visible and in a stable position, no scrolling. The left cluster
+   stacks: 123/ABC on the first row, an equally wide space key on the second. */
 @media (max-width: 519px) {
-  :root.cap-native.kb-open .kb-bar { overflow-x: visible; }
+  :root.cap-native.kb-open .kb-bar { overflow-x: visible; align-items: stretch; }
+  .kb-left { flex-direction: column; align-items: stretch; gap: 5px; }
+  .kb-toggle { flex: 1; }
+  .kb-toggle .kb-seg { flex: 1; }
+  .kb-key-space { flex: 1; min-width: 0; height: auto; }
   .kb-keys { display: grid; grid-template-columns: repeat(6, 1fr); gap: 5px; }
   .kb-key { min-width: 0; }
 }
