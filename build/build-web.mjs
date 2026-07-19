@@ -295,6 +295,17 @@ body:has(> .web-back) header { padding-left: 52px; }
   border-top: 1px solid var(--border);
   overflow-x: auto;
 }
+/* A 123/ABC switch morphs the keyboard, then iOS slides its QuickType
+   predictive bar in a beat later — the webview resizes TWICE, so a bar pinned
+   to its bottom would crawl to an interim height and jump. The renderer toggles
+   .kb-morphing for the switch: fade out fast, then fade back in (base rule)
+   once the visual viewport stops resizing, landing the keys straight at rest. */
+.kb-bar { transition: opacity 180ms ease; }
+:root.cap-native.kb-morphing .kb-bar {
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 80ms ease-out;
+}
 .kb-bar button { touch-action: manipulation; -webkit-tap-highlight-color: transparent; }
 .kb-toggle {
   display: inline-flex;
@@ -396,6 +407,35 @@ body:has(> .web-back) header { padding-left: 52px; }
   .kb-keys { display: grid; grid-template-columns: repeat(6, 1fr); gap: 5px; }
   .kb-key { min-width: 0; }
 }
+
+/* ---- iPad only: collapse/expand the operator bar from the footer ---- */
+/* A hardware keyboard is usually attached on iPad, making the on-screen bar
+   redundant. A footer chevron hides it; the choice persists (localStorage). The
+   renderer adds .cap-ipad on iPad only, so iPhone never shows the control. */
+.kb-collapse-toggle { display: none; }
+:root.cap-native.cap-ipad .status-bar { position: relative; padding-left: 42px; }
+:root.cap-native.cap-ipad .kb-collapse-toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  position: absolute;
+  left: 8px;
+  top: 12px;                 /* centre of the 24px visible bar (safe-area padding is below it) */
+  transform: translateY(-50%);
+  width: 30px;
+  height: 19px;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  background: var(--bg-soft);
+  color: var(--text-soft);
+  -webkit-tap-highlight-color: transparent;
+}
+.kb-collapse-toggle svg { display: block; transition: transform 200ms ease; }
+:root.kb-collapsed .kb-collapse-toggle svg { transform: rotate(180deg); }
+/* Collapsed: keep the operator bar hidden even while the editor is focused. Same
+   specificity as the .kb-open show rule above, so this must come after it. */
+:root.cap-native.kb-collapsed .kb-bar { display: none; }
 `;
 await writeFile(join(out, 'web.css'), WEB_CSS, 'utf8');
 

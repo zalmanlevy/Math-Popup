@@ -3416,6 +3416,46 @@ function ensureKbFocusKeeper(): HTMLInputElement {
   return el;
 }
 
+// A 123/ABC switch morphs the keyboard, then iOS slides its QuickType predictive
+// bar in a beat later — two native webview resizes. Rather than let the key bar
+// crawl to the interim height and jump up, fade it out (.kb-morphing) for the
+// switch and fade it back in once the visual viewport stops resizing, so the
+// keys cross-fade straight to their final height. Native only.
+let kbMorphSettle = 0;
+let kbMorphCap = 0;
+let kbMorphCleanup: (() => void) | null = null;
+
+function endKbMorph() {
+  window.clearTimeout(kbMorphSettle);
+  window.clearTimeout(kbMorphCap);
+  if (kbMorphCleanup) { kbMorphCleanup(); kbMorphCleanup = null; }
+  document.documentElement.classList.remove('kb-morphing');
+}
+
+function beginKbMorph() {
+  if (!IS_CAP_NATIVE) return;
+  endKbMorph();  // reset any in-flight morph (rapid toggles)
+  document.documentElement.classList.add('kb-morphing');
+  // Each resize (the keyboard morph, then the predictive bar) pushes the settle
+  // point out; when they stop for 180ms the bar fades back in at rest. Listen to
+  // both viewports — iOS versions differ on which fires under resize:'native'.
+  const onResize = () => {
+    window.clearTimeout(kbMorphSettle);
+    kbMorphSettle = window.setTimeout(endKbMorph, 180);
+  };
+  const vv = window.visualViewport;
+  vv?.addEventListener('resize', onResize);
+  window.addEventListener('resize', onResize);
+  kbMorphCleanup = () => {
+    vv?.removeEventListener('resize', onResize);
+    window.removeEventListener('resize', onResize);
+  };
+  // Baseline settle if no resize fires (ABC→123 can be a no-op height change);
+  // hard cap so the bar can never wedge invisible.
+  kbMorphSettle = window.setTimeout(endKbMorph, 340);
+  kbMorphCap = window.setTimeout(endKbMorph, 900);
+}
+
 function insertSnippetAtCaret(text: string) {
   if (document.activeElement !== editor) editor.focus();
   // The physical space bar runs the mode shortcuts BEFORE inserting anything
@@ -3475,6 +3515,7 @@ function setKeyboardMode(mode: KbMode) {
     // the webview resizes ONCE to the new keyboard height instead of bouncing
     // through full height. Falls back to the plain blur if focus is refused.
     kbSwitching = true;
+    beginKbMorph();
     const keeper = ensureKbFocusKeeper();
     keeper.setAttribute('inputmode', mode === 'numeric' ? 'decimal' : 'text');
     keeper.setAttribute('autocorrect', mode === 'text' ? 'on' : 'off');
@@ -3528,6 +3569,55 @@ function runKbAction(act: string) {
   else if (act === 'link') insertLink();
 }
 
+// iPad-only: a hardware keyboard is usually attached, so the on-screen operator
+// bar is redundant. A chevron in the footer collapses/expands it, and the choice
+// is remembered across launches (localStorage). iPhone always keeps the bar — no
+// hardware keyboard, and the number pad has no operators — so it gets no toggle.
+const KB_COLLAPSE_KEY = 'mp-kb-collapsed';
+
+function setupKbCollapseToggle() {
+  if (!IS_CAP_NATIVE) return;
+  // screen.* is the physical device size — stable across window / Stage Manager
+  // resizing — so an iPad in a small window is still detected as an iPad. The
+  // short side splits the families cleanly: iPhone ≤ 440, iPad ≥ 744.
+  const isIpad = Math.min(window.screen.width, window.screen.height) >= 640;
+  if (!isIpad) return;
+  const root = document.documentElement;
+  root.classList.add('cap-ipad');
+  // Restore the saved choice before the bar can show (focus reveals it) so
+  // there's no expand→collapse flash on launch.
+  let collapsed = false;
+  try { collapsed = localStorage.getItem(KB_COLLAPSE_KEY) === '1'; } catch { /* private mode */ }
+  root.classList.toggle('kb-collapsed', collapsed);
+
+  const footer = document.querySelector('.status-bar');
+  if (!footer) return;
+  const btn = document.createElement('button');
+  btn.type = 'button';
+  btn.className = 'kb-collapse-toggle';
+  // Down chevron (matches the tab-overflow / find chevrons); CSS rotates it 180°
+  // when collapsed.
+  btn.innerHTML = '<svg viewBox="0 0 12 12" width="11" height="11" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M2.5 4.5 L6 8 L9.5 4.5"/></svg>';
+  const sync = () => {
+    const c = root.classList.contains('kb-collapsed');
+    const label = c ? 'Show operator bar' : 'Hide operator bar';
+    btn.setAttribute('aria-label', label);
+    btn.title = label;
+    btn.setAttribute('aria-pressed', c ? 'true' : 'false');
+  };
+  sync();
+  // Don't steal focus from the editor (that would dismiss the keyboard); click
+  // still fires. Same guard the key bar and gutter use.
+  btn.addEventListener('mousedown', (e) => e.preventDefault());
+  btn.addEventListener('click', () => {
+    const c = !root.classList.contains('kb-collapsed');
+    root.classList.toggle('kb-collapsed', c);
+    try { localStorage.setItem(KB_COLLAPSE_KEY, c ? '1' : '0'); } catch { /* ignore */ }
+    sync();
+  });
+  footer.appendChild(btn);
+}
+
 function initMathKeyboardBar() {
   kbBar = document.createElement('div');
   kbBar.className = 'kb-bar';
@@ -3568,6 +3658,7 @@ function initMathKeyboardBar() {
     if (!kbSwitching) document.documentElement.classList.remove('kb-open');
   });
   setKeyboardMode(kbMode);   // default: numeric — applies inputmode pre-focus
+  setupKbCollapseToggle();
 }
 
 // Build the inline result overlay HTML: a green "= answer" pinned to the right
