@@ -101,16 +101,36 @@ function normalize(s: Settings): Settings {
   return s;
 }
 
+// iOS WKWebView's IndexedDB can wedge (open/get never settles) on the second
+// page loaded under the app's custom scheme — settings.html, or index.html
+// after navigating back. An unbounded await there hangs startup forever even
+// though the synchronous localStorage mirror already holds the data.
+function withTimeout<T>(p: Promise<T>, ms: number): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const t = setTimeout(() => reject(new Error(`IndexedDB read timed out after ${ms}ms`)), ms);
+    p.then(
+      (v) => { clearTimeout(t); resolve(v); },
+      (e) => { clearTimeout(t); reject(e); }
+    );
+  });
+}
+
 // Returns the stored Settings, or null ONLY when the store is genuinely empty.
 // Throws on a real read error (so the caller can avoid treating it as first-run).
 async function readStored(): Promise<Settings | null> {
   const localEnv = readLocalEnvelope();
   let idbEnv: Envelope | undefined;
   try {
-    idbEnv = await idbGet<Envelope>(KEY);
+    // The mirror is written synchronously BEFORE every debounced IndexedDB
+    // write and refreshed after every successful read, so it is never older
+    // than the IndexedDB copy — when it exists, a hung IndexedDB read may be
+    // abandoned in its favor. With no mirror (true first run) wait fully.
+    idbEnv = localEnv
+      ? await withTimeout(idbGet<Envelope>(KEY), 1200)
+      : await idbGet<Envelope>(KEY);
   } catch (err) {
     if (!localEnv) throw err;
-    console.warn('[math-popup] IndexedDB read failed; recovered settings from local mirror', err);
+    console.warn('[math-popup] IndexedDB read failed or hung; recovered settings from local mirror', err);
   }
   const env = localEnv && (!idbEnv || (localEnv.savedAt ?? 0) > (idbEnv.savedAt ?? 0))
     ? localEnv

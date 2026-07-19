@@ -39,7 +39,8 @@ Native behavior lives in:
    permission error). Record Issuer ID + Key ID; the `.p8` downloads once.
 3. **Create the app record**: App Store Connect → Apps → “+” → New App → iOS,
    bundle ID `com.zalmanlevy.mathpopup`, any SKU. App names are globally
-   unique — have a fallback ready if “Math Popup” is taken.
+   unique. The app is named **“Math Pad X”** on iOS (App Store Connect name +
+   `CFBundleDisplayName`); the Windows/web builds keep the “Math Popup” brand.
 4. **Repo secrets** (Settings → Secrets and variables → Actions → *Secrets*):
    - `APPLE_TEAM_ID` — the team ID from the developer portal
    - `ASC_KEY_ID` — API key ID

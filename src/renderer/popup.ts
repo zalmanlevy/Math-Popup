@@ -671,6 +671,55 @@ function bindEvents() {
   findNextBtn.addEventListener('click', () => { findNext(1); findInput.focus(); });
   findCloseBtn.addEventListener('click', () => closeFind());
 
+  // iOS never fires `contextmenu` for a touch long-press, so every
+  // right-click affordance (tab Rename/Close, new-tab menu, overflow and
+  // archive row menus) was unreachable there. Synthesize it: a 500ms
+  // single-finger hold with <10px movement dispatches a real contextmenu
+  // event at the touch point — all existing listeners fire unchanged. The
+  // editor and text fields are excluded (iOS long-press there is the system
+  // text-selection gesture). Native app only; desktop untouched.
+  if (IS_CAP_NATIVE) {
+    let lpTimer: number | null = null;
+    let lpTarget: EventTarget | null = null;
+    let lpX = 0;
+    let lpY = 0;
+    let lpFired = false;
+    const cancelLongPress = () => {
+      if (lpTimer !== null) { window.clearTimeout(lpTimer); lpTimer = null; }
+    };
+    document.addEventListener('touchstart', (e) => {
+      cancelLongPress();
+      lpFired = false;
+      if (e.touches.length !== 1) return;
+      const target = e.target as HTMLElement | null;
+      if (target?.closest?.('#editor, input, textarea, [contenteditable]')) return;
+      const t = e.touches[0];
+      lpTarget = e.target;
+      lpX = t.clientX;
+      lpY = t.clientY;
+      lpTimer = window.setTimeout(() => {
+        lpTimer = null;
+        lpFired = true;
+        (lpTarget as HTMLElement | null)?.dispatchEvent(new MouseEvent('contextmenu', {
+          bubbles: true, cancelable: true, view: window, clientX: lpX, clientY: lpY,
+        }));
+      }, 500);
+    }, { passive: true });
+    document.addEventListener('touchmove', (e) => {
+      if (lpTimer === null) return;
+      const t = e.touches[0];
+      if (Math.abs(t.clientX - lpX) > 10 || Math.abs(t.clientY - lpY) > 10) cancelLongPress();
+    }, { passive: true });
+    document.addEventListener('touchend', (e) => {
+      cancelLongPress();
+      // A completed long-press must not also deliver the tap (it would e.g.
+      // switch to the tab whose menu just opened) — swallow the synthetic
+      // mouse events for this touch.
+      if (lpFired && e.cancelable) e.preventDefault();
+    }, { passive: false });
+    document.addEventListener('touchcancel', cancelLongPress, { passive: true });
+  }
+
   // Desktop: full render per resize (unchanged). Web/native iPad: rAF-coalesced
   // fast relayout so continuous window resizing stays smooth (see the
   // "Window-resize rendering" block above).

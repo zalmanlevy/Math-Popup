@@ -4,8 +4,11 @@ import type { CapacitorConfig } from '@capacitor/cli';
 // site the web/PWA build produces (web-dist/, see build/build-web.mjs) — the
 // Electron desktop build (dist/) is completely separate and unaffected.
 const config: CapacitorConfig = {
+  // The bundle id is permanent (internal only, never user-visible); the iOS
+  // marketing name is "Math Pad X" — set in CFBundleDisplayName and in the
+  // App Store Connect record. Windows/web keep the "Math Popup" branding.
   appId: 'com.zalmanlevy.mathpopup',
-  appName: 'Math Popup',
+  appName: 'Math Pad X',
   webDir: 'web-dist',
   // Matches the app's light page background (--bg). Prevents a white flash on
   // the native webview surface before first paint.

@@ -134,6 +134,14 @@ body:has(> .web-back) header { padding-left: 52px; }
    window controls are — shift it (and the heading) right of them. */
 :root.cap-native.cap-windowed .web-back { left: 76px; }
 :root.cap-native.cap-windowed body:has(> .web-back) header { padding-left: 122px; }
+/* Settings that only mean something on the Windows desktop app (startup/tray,
+   taskbar pinning, Obsidian file sync, in-app updater — iOS updates ship via
+   the App Store/TestFlight). Hidden in the native app only. */
+:root.cap-native label.row:has(#launch-at-startup),
+:root.cap-native label.row:has(#taskbar-icon),
+:root.cap-native label.row:has(#advanced-mode),
+:root.cap-native #update-banner,
+:root.cap-native div.row:has(> #check-updates) { display: none; }
 /* Rounded window corners clip flush content and the resize grip overlays the
    bottom-right — give the footer breathing room on all three sides. */
 :root.cap-native.cap-windowed .status-bar {
