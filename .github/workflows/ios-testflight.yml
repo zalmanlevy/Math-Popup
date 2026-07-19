@@ -1,0 +1,139 @@
+# Builds the Capacitor iOS app and uploads it to TestFlight — no Mac needed.
+#
+# Trigger manually (Actions tab → "iOS TestFlight" → Run workflow, ref: main).
+# workflow_dispatch only works once this file exists on the default branch.
+#
+# Signing model (proven in production; see docs/IOS_RELEASE.md):
+#   - ARCHIVE is signed ad-hoc (CODE_SIGN_IDENTITY=-). Archiving with full
+#     automatic signing would request a *development* profile, which requires a
+#     registered device — a fresh team has none. Never archive with
+#     CODE_SIGNING_ALLOWED=NO (that strips entitlements).
+#   - EXPORT does the real signing: cloud-managed automatic signing with the
+#     App Store Connect API key (-allowProvisioningUpdates + -authenticationKey*).
+#     Apple mints/rotates the distribution cert and profiles server-side.
+#     The ASC API key must have the Admin role — App Manager cannot create the
+#     distribution certificate and fails with a cloud-signing permission error.
+#
+# Required repository secrets:
+#   APPLE_TEAM_ID        Apple Developer Team ID
+#   ASC_KEY_ID           App Store Connect API key ID
+#   ASC_ISSUER_ID        App Store Connect API issuer ID
+#   ASC_API_PRIVATE_KEY  Full contents of the .p8 key (BEGIN/END lines included)
+name: iOS TestFlight
+
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: ios-testflight
+  cancel-in-progress: false
+
+jobs:
+  build-upload:
+    # Pinned: Apple requires iOS 26 SDK builds since 2026-04-28, and
+    # macos-latest is unreliable mid-migration. Image default Xcode is 26.x.
+    runs-on: macos-26
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        # Electron is a devDependency for the separate Windows desktop build;
+        # its mac binary is dead weight here.
+        run: npm ci
+        env:
+          ELECTRON_SKIP_BINARY_DOWNLOAD: '1'
+
+      - name: Build web bundle
+        run: npm run build:web
+
+      - name: Sync Capacitor iOS
+        run: |
+          npx cap sync ios
+          node scripts/fix-capacitor-ios-package.mjs
+
+      - name: Compute versions
+        id: ver
+        # Build number must be unique & monotonic per upload. run_number*100 +
+        # run_attempt keeps re-runs after a post-upload failure monotonic too.
+        run: |
+          BUILD_NUMBER=$(( ${{ github.run_number }} * 100 + ${{ github.run_attempt }} ))
+          MARKETING_VERSION=$(node -p "require('./package.json').version")
+          echo "build=$BUILD_NUMBER" >> "$GITHUB_OUTPUT"
+          echo "version=$MARKETING_VERSION" >> "$GITHUB_OUTPUT"
+          echo "Marketing $MARKETING_VERSION build $BUILD_NUMBER"
+
+      - name: Archive (ad-hoc signed)
+        run: |
+          xcodebuild archive \
+            -project ios/App/App.xcodeproj \
+            -scheme App \
+            -configuration Release \
+            -destination 'generic/platform=iOS' \
+            -archivePath "$RUNNER_TEMP/App.xcarchive" \
+            CODE_SIGN_STYLE=Automatic \
+            CODE_SIGN_IDENTITY=- \
+            AD_HOC_CODE_SIGNING_ALLOWED=YES \
+            DEVELOPMENT_TEAM="$APPLE_TEAM_ID" \
+            MARKETING_VERSION="${{ steps.ver.outputs.version }}" \
+            CURRENT_PROJECT_VERSION="${{ steps.ver.outputs.build }}"
+        env:
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+
+      - name: Export (cloud-managed App Store signing)
+        run: |
+          KEY_PATH="$RUNNER_TEMP/asc_api_key.p8"
+          printf '%s' "$ASC_API_PRIVATE_KEY" > "$KEY_PATH"
+          cat > "$RUNNER_TEMP/ExportOptions.plist" << EOF
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+            <key>method</key>
+            <string>app-store-connect</string>
+            <key>signingStyle</key>
+            <string>automatic</string>
+            <key>teamID</key>
+            <string>${APPLE_TEAM_ID}</string>
+            <key>destination</key>
+            <string>export</string>
+            <key>stripSwiftSymbols</key>
+            <true/>
+            <key>uploadSymbols</key>
+            <true/>
+          </dict>
+          </plist>
+          EOF
+          xcodebuild -exportArchive \
+            -archivePath "$RUNNER_TEMP/App.xcarchive" \
+            -exportOptionsPlist "$RUNNER_TEMP/ExportOptions.plist" \
+            -exportPath "$RUNNER_TEMP/export" \
+            -allowProvisioningUpdates \
+            -authenticationKeyPath "$KEY_PATH" \
+            -authenticationKeyID "$ASC_KEY_ID" \
+            -authenticationKeyIssuerID "$ASC_ISSUER_ID"
+        env:
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+          ASC_API_PRIVATE_KEY: ${{ secrets.ASC_API_PRIVATE_KEY }}
+
+      - name: Locate IPA
+        id: ipa
+        run: |
+          IPA=$(find "$RUNNER_TEMP/export" -name '*.ipa' -print -quit)
+          test -n "$IPA" || { echo "No IPA produced"; exit 1; }
+          echo "path=$IPA" >> "$GITHUB_OUTPUT"
+
+      - name: Upload to TestFlight
+        uses: apple-actions/upload-testflight-build@v3
+        with:
+          app-path: ${{ steps.ipa.outputs.path }}
+          issuer-id: ${{ secrets.ASC_ISSUER_ID }}
+          api-key-id: ${{ secrets.ASC_KEY_ID }}
+          api-private-key: ${{ secrets.ASC_API_PRIVATE_KEY }}

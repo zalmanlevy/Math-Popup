@@ -35,4 +35,15 @@ await sharp({ create: { width: 180, height: 180, channels: 4, background: bg } }
   .composite([{ input: await fit(160, transparent), gravity: 'center' }])
   .png().toFile(join(outDir, 'apple-touch-icon-180.png'));
 
+// iOS App Store icon — 1024x1024, fully OPAQUE (alpha channel stripped; the App
+// Store rejects icons with transparency). Written straight into the Xcode asset
+// catalog, which the Capacitor iOS project references as its single app icon.
+const iosIcon = join(root, 'ios', 'App', 'App', 'Assets.xcassets', 'AppIcon.appiconset', 'AppIcon-512@2x.png');
+await sharp({ create: { width: 1024, height: 1024, channels: 4, background: bg } })
+  .composite([{ input: await fit(820, transparent), gravity: 'center' }])
+  .flatten({ background: bg })
+  .removeAlpha()
+  .png().toFile(iosIcon);
+
 console.log('[gen-icons] wrote icon-192, icon-512, maskable-512, apple-touch-icon-180 to', outDir);
+console.log('[gen-icons] wrote AppIcon-512@2x.png (1024, opaque) to the iOS asset catalog');

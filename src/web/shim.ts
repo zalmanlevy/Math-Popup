@@ -4,9 +4,15 @@
 // capabilities (tray, always-on-top, auto-update, Obsidian file sync) degrade to
 // safe no-ops; everything else is backed by real browser APIs.
 import { getSettings, setSettings, flushSettings, setOnSettingsChanged } from './storage';
+import { initNativeShell, nativeCopyHaptic, isNativeApp } from './native';
 import type { Settings } from '../shared/types';
 
 type Resolved = 'light' | 'dark';
+
+// Renderer hint that it's running in the web/native shell (vs Electron), so it
+// can pick the touch-friendly fast paths (rAF-coalesced resize relayout, pinch
+// zoom) without changing desktop behavior. Set before the app bundle loads.
+(window as unknown as { mathPopupIsWeb?: boolean }).mathPopupIsWeb = true;
 
 // ---- theme: OS scheme changes drive onThemeChanged (renderer re-renders syntax) ----
 const themeMq = window.matchMedia('(prefers-color-scheme: dark)');
@@ -62,9 +68,14 @@ window.mathPopup = {
     } else {
       clipboardFallback(text);
     }
+    nativeCopyHaptic();   // no-op outside the native iOS app
   },
   setZoomFactor: (factor: number) => {
     (document.documentElement.style as unknown as { zoom: string }).zoom = String(factor);
+    // CSS zoom changes the layout-viewport width, which moves the editor's wrap
+    // points. Electron's native zoom emits a real resize event; the browser's
+    // CSS zoom does not — synthesize one so the renderer re-aligns its gutters.
+    window.dispatchEvent(new Event('resize'));
   },
   onThemeChanged: (cb) => {
     themeCbs.add(cb);
@@ -93,10 +104,18 @@ window.mathPopup = {
   onObsidianFileChanged: () => () => {},
 };
 
+// ---- native (Capacitor iOS) shell ----
+
+// Status-bar/keyboard theme sync, edge-to-edge CSS hooks, background flush.
+// No-ops entirely outside the native app.
+initNativeShell(() => { void flushSettings(); });
+
 // ---- PWA plumbing ----
 
 // Register the offline/service worker (root scope controls all three pages).
-if ('serviceWorker' in navigator) {
+// Skipped inside the native app: service workers don't run under the
+// capacitor:// scheme, and the app's assets are bundled on disk anyway.
+if ('serviceWorker' in navigator && !isNativeApp) {
   window.addEventListener('load', () => {
     navigator.serviceWorker.register('/sw.js').catch(() => { /* offline still works from cache */ });
   });
