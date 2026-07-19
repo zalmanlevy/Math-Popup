@@ -3485,9 +3485,11 @@ function insertSnippetAtCaret(text: string) {
     ensureCaretLineVisible();
     return;
   }
-  // Slash menu open: the bar's space key confirms the highlighted command,
-  // like Enter (mirrors handleMenuKey's space handling for real keystrokes).
-  if (text === ' ' && menuState.open && menuState.kind === 'slash' && menuState.filtered.length > 0) {
+  // Slash menu open: the bar's space key confirms the highlighted command, like
+  // Enter (mirrors handleMenuKey). Only once a query follows the "/" though — a
+  // bare "/" + space is division and must type a literal space, not run a command.
+  if (text === ' ' && menuState.open && menuState.kind === 'slash' && menuState.filtered.length > 0 &&
+      editor.selectionStart - menuState.triggerStart > 1) {
     confirmMenuSelection();
     ensureCaretLineVisible();
     return;
@@ -3563,9 +3565,12 @@ const KB_MATH_KEYS: Array<[label: string, insert: string]> = [
   ['(', '('], [')', ')'], ['%', '%'], ['=', '='],
   ['k', 'k'], ['m', 'm'],
 ];
+// ABC-mode keys. Italic was dropped (rarely used) for an "=" so equations are
+// one tap away while writing. The checkbox draws a bold box (cls kb-ck) — the
+// ☐ glyph renders too thin.
 const KB_TEXT_KEYS: Array<[label: string, insOrAct: string, isAction?: boolean, cls?: string]> = [
-  ['#', '# '], ['•', '- '], ['1.', '1. '], ['☐', '- [ ] '],
-  ['B', 'bold', true, 'kb-b'], ['I', 'italic', true, 'kb-i'],
+  ['#', '# '], ['•', '- '], ['1.', '1. '], ['☐', '- [ ] ', false, 'kb-ck'],
+  ['B', 'bold', true, 'kb-b'], ['=', '='],
   ['U', 'underline', true, 'kb-u'], ['🔗', 'link', true],
   ['(', '('], [')', ')'], ['/', '/'],
 ];
@@ -3576,16 +3581,20 @@ function renderKbKeys() {
   keysEl.innerHTML = kbMode === 'numeric'
     ? KB_MATH_KEYS.map(([label, ins]) =>
         `<button type="button" class="kb-key" data-ins="${escapeAttr(ins)}">${escapeHtml(label)}</button>`).join('')
-    : KB_TEXT_KEYS.map(([label, val, isAction, cls]) =>
-        `<button type="button" class="kb-key${cls ? ' ' + cls : ''}" data-${isAction ? 'act' : 'ins'}="${escapeAttr(val)}">${escapeHtml(label)}</button>`).join('');
+    : KB_TEXT_KEYS.map(([label, val, isAction, cls]) => {
+        // The checkbox is a CSS-drawn box (crisper/bolder than the ☐ glyph).
+        const inner = cls === 'kb-ck' ? '<span class="kb-box"></span>' : escapeHtml(label);
+        const aria = cls === 'kb-ck' ? ' aria-label="Checkbox"' : '';
+        return `<button type="button" class="kb-key${cls ? ' ' + cls : ''}" data-${isAction ? 'act' : 'ins'}="${escapeAttr(val)}"${aria}>${inner}</button>`;
+      }).join('');
 }
 
 function runKbAction(act: string) {
   if (document.activeElement !== editor) editor.focus();
   if (act === 'bold') toggleInlineFormat('**');
-  else if (act === 'italic') toggleInlineFormat('*');
   else if (act === 'underline') toggleInlineFormat('__');
   else if (act === 'link') insertLink();
+  else if (act === 'enter') insertSnippetAtCaret('\n');  // the bar's return key: next line
 }
 
 // iPad-only: a hardware keyboard is usually attached, so the on-screen operator
@@ -3640,17 +3649,23 @@ function setupKbCollapseToggle() {
 function initMathKeyboardBar() {
   kbBar = document.createElement('div');
   kbBar.className = 'kb-bar';
-  // Left cluster: the 123/ABC toggle with the space key — side by side on wide
-  // bars, stacked (toggle over an equally wide space) on narrow two-row bars.
+  // Left cluster: the 123/ABC toggle over a split space | return row (both modes).
+  // Side by side on wide bars; stacked (toggle over the space/return pair) on the
+  // narrow two-row bar.
   kbBar.innerHTML =
     `<div class="kb-left">` +
     `<div class="kb-toggle" role="group" aria-label="Keyboard type">` +
     `<button type="button" class="kb-seg" data-kb="numeric">123</button>` +
     `<button type="button" class="kb-seg" data-kb="text">ABC</button>` +
     `</div>` +
+    `<div class="kb-left-actions">` +
     `<button type="button" class="kb-key kb-key-space" data-ins=" " aria-label="Space">` +
-    `<span class="kb-space-word">space</span><span class="kb-space-sym" aria-hidden="true"></span>` +
+    `<span class="kb-key-word">space</span><span class="kb-space-sym" aria-hidden="true"></span>` +
     `</button>` +
+    `<button type="button" class="kb-key kb-key-enter" data-act="enter" aria-label="New line">` +
+    `<span class="kb-key-word">return</span><span class="kb-enter-sym" aria-hidden="true">↵</span>` +
+    `</button>` +
+    `</div>` +
     `</div>` +
     `<div class="kb-keys"></div>`;
   document.body.appendChild(kbBar);
@@ -4381,8 +4396,11 @@ function handleMenuKey(e: KeyboardEvent): boolean {
   // Enter awkward to reach mid-thought). Desktop keeps its exact behavior
   // (space closes the menu by typing a space). Slash only — in variable
   // completion a space must end the identifier, never accept a completion.
+  // BUT only once a query has been typed after the "/": a bare "/" + space is
+  // division ("10 / 2"), so it must type a literal space, not run a command.
   if (e.key === ' ' && IS_WEB_SHELL && menuState.kind === 'slash' &&
-      !e.ctrlKey && !e.metaKey && !e.altKey && menuState.filtered.length > 0) {
+      !e.ctrlKey && !e.metaKey && !e.altKey && menuState.filtered.length > 0 &&
+      editor.selectionStart - menuState.triggerStart > 1) {
     e.preventDefault();
     confirmMenuSelection();
     return true;

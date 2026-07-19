@@ -338,8 +338,15 @@ body:has(> .web-back) header { padding-left: 52px; }
 .kb-key:active { background: var(--bg-soft); }
 /* ABC-mode markdown keys: styled like what they produce. */
 .kb-key.kb-b { font-family: var(--font-ui); font-weight: 800; }
-.kb-key.kb-i { font-family: var(--font-ui); font-style: italic; }
 .kb-key.kb-u { font-family: var(--font-ui); text-decoration: underline; text-underline-offset: 2px; }
+/* Bold checkbox — the ☐ glyph renders too thin, so draw a crisp box instead. */
+.kb-key.kb-ck .kb-box {
+  display: inline-block;
+  width: 15px;
+  height: 15px;
+  border: 2px solid currentColor;
+  border-radius: 3px;
+}
 /* Invisible 1px input that briefly holds focus during a 123/ABC switch so the
    iOS keyboard morphs in place instead of dismissing and re-presenting.
    opacity:0 (not display:none / visibility:hidden) — iOS refuses to focus
@@ -360,44 +367,56 @@ body:has(> .web-back) header { padding-left: 52px; }
   pointer-events: none;
 }
 .kb-left { display: flex; align-items: center; gap: 8px; flex: 0 0 auto; }
-.kb-key-space {
-  flex: 0 0 56px;
-  min-width: 56px;
+/* space | return share the slot the single space key used to occupy. */
+.kb-left-actions { display: flex; align-items: stretch; gap: 6px; flex: 0 0 auto; }
+.kb-key-space, .kb-key-enter {
+  flex: 0 0 52px;
+  min-width: 52px;
   display: inline-flex;
   flex-direction: column;
   align-items: center;
   justify-content: center;
   gap: 3px;
-  padding: 3px 0 5px;
+  padding: 3px 4px 5px;
 }
-.kb-space-word {
+.kb-key-word {
   font-size: 9px;
   line-height: 1;
   font-family: var(--font-ui);
   color: var(--text-soft);
-  letter-spacing: 0.05em;
+  letter-spacing: 0.02em;
 }
 /* Drawn open-box space glyph (⎵) — the Unicode character renders miniature,
    so draw it: full-size, as wide as the key allows. */
 .kb-space-sym {
   display: block;
-  width: 62%;
-  min-width: 24px;
-  max-width: 46px;
+  width: 58%;
+  min-width: 20px;
+  max-width: 38px;
   height: 9px;
   border: 2px solid var(--text);
   border-top: 0;
   border-radius: 0 0 4px 4px;
 }
+/* Return arrow (↵), sized to sit on the same baseline as the space glyph. */
+.kb-enter-sym {
+  display: block;
+  height: 9px;
+  line-height: 9px;
+  font-size: 15px;
+  color: var(--text);
+  font-family: var(--font-ui);
+}
 /* Narrow (iPhone portrait, skinny iPad windows): two fixed rows of six keys —
    every key visible and in a stable position, no scrolling. The left cluster
-   stacks: 123/ABC on the first row, an equally wide space key on the second. */
+   stacks: 123/ABC on the first row, the split space|return pair on the second. */
 @media (max-width: 519px) {
   :root.cap-native.kb-open .kb-bar { overflow-x: visible; align-items: stretch; }
   .kb-left { flex-direction: column; align-items: stretch; gap: 5px; }
   .kb-toggle { flex: 1; }
   .kb-toggle .kb-seg { flex: 1; }
-  .kb-key-space { flex: 1; min-width: 0; height: auto; }
+  .kb-left-actions { flex: 1; }
+  .kb-key-space, .kb-key-enter { flex: 1; min-width: 0; height: auto; }
   .kb-keys { display: grid; grid-template-columns: repeat(6, 1fr); gap: 5px; }
   .kb-key { min-width: 0; }
 }
