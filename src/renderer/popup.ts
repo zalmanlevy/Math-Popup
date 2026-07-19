@@ -3417,43 +3417,62 @@ function ensureKbFocusKeeper(): HTMLInputElement {
 }
 
 // A 123/ABC switch morphs the keyboard, then iOS slides its QuickType predictive
-// bar in a beat later — two native webview resizes. Rather than let the key bar
-// crawl to the interim height and jump up, fade it out (.kb-morphing) for the
-// switch and fade it back in once the visual viewport stops resizing, so the
-// keys cross-fade straight to their final height. Native only.
-let kbMorphSettle = 0;
-let kbMorphCap = 0;
-let kbMorphCleanup: (() => void) | null = null;
+// bar in a beat later — two native webview resizes, each of which JUMPS the key
+// bar (it rides the resized webview's bottom) to a new height. Instead of letting
+// it teleport (or fading it out and leaving a blank gap), FLIP each jump into a
+// slide: armed by a switch, every viewport resize re-inverts the bar to where it
+// just was and animates it to the new resting height — so it glides straight to
+// its final spot, staying fully visible the whole time. resize:'native' and the
+// editor layout are untouched; only the bar's own transform moves. Native only.
+let kbFlipArmed = false;
+let kbFlipFirstTop = 0;
+let kbFlipDisarm = 0;
+let kbFlipLockUntil = 0;
 
-function endKbMorph() {
-  window.clearTimeout(kbMorphSettle);
-  window.clearTimeout(kbMorphCap);
-  if (kbMorphCleanup) { kbMorphCleanup(); kbMorphCleanup = null; }
-  document.documentElement.classList.remove('kb-morphing');
+function disarmKbFlip() {
+  kbFlipArmed = false;
+  if (kbBar) { kbBar.style.transition = ''; kbBar.style.transform = ''; kbBar.style.willChange = ''; }
 }
 
-function beginKbMorph() {
-  if (!IS_CAP_NATIVE) return;
-  endKbMorph();  // reset any in-flight morph (rapid toggles)
-  document.documentElement.classList.add('kb-morphing');
-  // Each resize (the keyboard morph, then the predictive bar) pushes the settle
-  // point out; when they stop for 180ms the bar fades back in at rest. Listen to
-  // both viewports — iOS versions differ on which fires under resize:'native'.
-  const onResize = () => {
-    window.clearTimeout(kbMorphSettle);
-    kbMorphSettle = window.setTimeout(endKbMorph, 180);
-  };
-  const vv = window.visualViewport;
-  vv?.addEventListener('resize', onResize);
-  window.addEventListener('resize', onResize);
-  kbMorphCleanup = () => {
-    vv?.removeEventListener('resize', onResize);
-    window.removeEventListener('resize', onResize);
-  };
-  // Baseline settle if no resize fires (ABC→123 can be a no-op height change);
-  // hard cap so the bar can never wedge invisible.
-  kbMorphSettle = window.setTimeout(endKbMorph, 340);
-  kbMorphCap = window.setTimeout(endKbMorph, 900);
+function armKbFlip() {
+  if (!IS_CAP_NATIVE || !kbBar) return;
+  kbFlipArmed = true;
+  kbBar.style.willChange = 'transform';
+  // Capture where the bar sits BEFORE the keyboard resizes: the first resize
+  // event fires only after layout has already jumped, so the pre-jump position
+  // is the slide's start point.
+  kbFlipFirstTop = kbBar.getBoundingClientRect().top;
+  window.clearTimeout(kbFlipDisarm);
+  kbFlipDisarm = window.setTimeout(disarmKbFlip, 900);  // covers morph + late predictive bar
+}
+
+// Wired to visualViewport + window resize once (initMathKeyboardBar). No-op
+// unless a switch just armed it, so ordinary keyboard show/hide/rotate don't
+// animate the bar.
+function onKbFlipResize() {
+  if (!kbFlipArmed || !kbBar) return;
+  // One physical webview resize can fire BOTH visualViewport and window 'resize';
+  // process only the first. A duplicate would measure zero further jump and clear
+  // the invert, canceling the slide. The late predictive-bar resize (~300ms+) is
+  // well past this lock, so it still animates.
+  const now = performance.now();
+  if (now < kbFlipLockUntil) return;
+  kbFlipLockUntil = now + 90;
+  // "Last": the bar's true resting position after this resize (clear any
+  // in-flight transform first so the measurement isn't offset).
+  kbBar.style.transition = 'none';
+  kbBar.style.transform = '';
+  const restTop = kbBar.getBoundingClientRect().top;
+  const delta = kbFlipFirstTop - restTop;   // how far it just jumped
+  kbFlipFirstTop = restTop;                  // next slide starts from here
+  if (Math.abs(delta) < 1) { kbBar.style.transform = ''; return; }
+  kbBar.style.transform = `translateY(${delta}px)`;  // invert: put it back where it was
+  void kbBar.offsetHeight;                            // commit the inverted frame
+  requestAnimationFrame(() => {
+    if (!kbBar) return;
+    kbBar.style.transition = 'transform 230ms cubic-bezier(0.22, 0.61, 0.36, 1)';
+    kbBar.style.transform = 'translateY(0)';          // play: slide to the new spot
+  });
 }
 
 function insertSnippetAtCaret(text: string) {
@@ -3515,7 +3534,7 @@ function setKeyboardMode(mode: KbMode) {
     // the webview resizes ONCE to the new keyboard height instead of bouncing
     // through full height. Falls back to the plain blur if focus is refused.
     kbSwitching = true;
-    beginKbMorph();
+    armKbFlip();
     const keeper = ensureKbFocusKeeper();
     keeper.setAttribute('inputmode', mode === 'numeric' ? 'decimal' : 'text');
     keeper.setAttribute('autocorrect', mode === 'text' ? 'on' : 'off');
@@ -3657,6 +3676,11 @@ function initMathKeyboardBar() {
   editor.addEventListener('blur', () => {
     if (!kbSwitching) document.documentElement.classList.remove('kb-open');
   });
+  // The webview resizes (and the bar jumps) on both viewport channels; listen to
+  // each — iOS versions differ on which fires under resize:'native'. onKbFlipResize
+  // is inert unless a 123/ABC switch just armed it.
+  window.visualViewport?.addEventListener('resize', onKbFlipResize);
+  window.addEventListener('resize', onKbFlipResize);
   setKeyboardMode(kbMode);   // default: numeric — applies inputmode pre-focus
   setupKbCollapseToggle();
 }

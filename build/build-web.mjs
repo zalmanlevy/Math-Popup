@@ -296,16 +296,10 @@ body:has(> .web-back) header { padding-left: 52px; }
   overflow-x: auto;
 }
 /* A 123/ABC switch morphs the keyboard, then iOS slides its QuickType
-   predictive bar in a beat later — the webview resizes TWICE, so a bar pinned
-   to its bottom would crawl to an interim height and jump. The renderer toggles
-   .kb-morphing for the switch: fade out fast, then fade back in (base rule)
-   once the visual viewport stops resizing, landing the keys straight at rest. */
-.kb-bar { transition: opacity 180ms ease; }
-:root.cap-native.kb-morphing .kb-bar {
-  opacity: 0;
-  pointer-events: none;
-  transition: opacity 80ms ease-out;
-}
+   predictive bar in a beat later — the webview resizes TWICE, so the bar (which
+   rides the webview bottom) jumps to a new height each time. The renderer FLIPs
+   those jumps into slides via an inline transform (see armKbFlip / onKbFlipResize
+   in popup.ts) — nothing to style here; the bar just stays put and glides. */
 .kb-bar button { touch-action: manipulation; -webkit-tap-highlight-color: transparent; }
 .kb-toggle {
   display: inline-flex;
