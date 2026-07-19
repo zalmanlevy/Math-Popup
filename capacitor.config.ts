@@ -15,6 +15,11 @@ const config: CapacitorConfig = {
     // the web build's head). 'automatic' would add a native inset ON TOP of the
     // CSS padding — double top gap + phantom scroll.
     contentInset: 'never',
+    // The app is a fixed shell (title bar / editor / footer); only the editor
+    // scrolls, via CSS. Without this, the webview's NATIVE scroll layer can
+    // still pan the whole page — most visibly while the keyboard is up, when
+    // iOS drags the header off screen trying to reveal the caret itself.
+    scrollEnabled: false,
   },
   plugins: {
     Keyboard: {
