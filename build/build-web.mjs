@@ -194,6 +194,20 @@ body:has(> .web-back) header { padding-left: 52px; }
   font-family: var(--font-mono);
 }
 .kb-key:active { background: var(--bg-soft); }
+.kb-key-space {
+  flex: 1.8 0 52px;
+  font-size: 11px;
+  font-family: var(--font-ui);
+  color: var(--text-soft);
+}
+/* Narrow (iPhone portrait, skinny iPad windows): two fixed rows of six keys —
+   every key visible and in a stable position, no scrolling. The 123/ABC
+   toggle sits to the left, vertically centered across both rows. */
+@media (max-width: 519px) {
+  :root.cap-native.kb-open .kb-bar { overflow-x: visible; }
+  .kb-keys { display: grid; grid-template-columns: repeat(6, 1fr); gap: 5px; }
+  .kb-key { min-width: 0; }
+}
 `;
 await writeFile(join(out, 'web.css'), WEB_CSS, 'utf8');
 

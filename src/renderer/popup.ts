@@ -3332,6 +3332,10 @@ function insertSnippetAtCaret(text: string) {
   editor.value = value.slice(0, start) + text + value.slice(end);
   editor.selectionStart = editor.selectionEnd = start + text.length;
   previousText = editor.value;
+  // Match physical typing: space and operators run the same auto-format pass a
+  // real keystroke triggers (suffix expansion "2k " → "2,000 ", auto-comma) —
+  // see shouldAutoFormatOnKey / handleSmartTab.
+  if (text === ' ' || /^[+\-*/^=()]$/.test(text)) maybeAutoFormat(text);
   scheduleSave();
   render();
   ensureCaretLineVisible();
@@ -3358,7 +3362,7 @@ function setKeyboardMode(mode: KbMode) {
 function initMathKeyboardBar() {
   const KEYS: Array<[label: string, insert: string]> = [
     ['+', '+'], ['−', '-'], ['×', '*'], ['÷', '/'], ['/', '/'],
-    ['(', '('], [')', ')'], ['%', '%'], ['=', '='],
+    ['(', '('], [')', ')'], ['space', ' '], ['%', '%'], ['=', '='],
     ['k', 'k'], ['m', 'm'],
   ];
   kbBar = document.createElement('div');
@@ -3370,7 +3374,7 @@ function initMathKeyboardBar() {
     `</div>` +
     `<div class="kb-keys">` +
     KEYS.map(([label, ins]) =>
-      `<button type="button" class="kb-key" data-ins="${ins}">${label}</button>`).join('') +
+      `<button type="button" class="kb-key${label === 'space' ? ' kb-key-space' : ''}" data-ins="${ins}">${label}</button>`).join('') +
     `</div>`;
   document.body.appendChild(kbBar);
   // Same trick as the line gutter: swallow mousedown so tapping a key never
