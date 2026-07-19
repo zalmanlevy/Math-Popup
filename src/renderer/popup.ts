@@ -3325,6 +3325,14 @@ let kbBar: HTMLDivElement | null = null;
 
 function insertSnippetAtCaret(text: string) {
   if (document.activeElement !== editor) editor.focus();
+  // The physical space bar runs the mode shortcuts BEFORE inserting anything
+  // (see onKeyDown): "//"+Space toggles the line's math/text mode and
+  // "/math"/"/text"+Space converts it — and the space itself is swallowed.
+  // The bar's space key must behave identically.
+  if (text === ' ' && (handleModeToggleShortcut() || handleModeCommand())) {
+    ensureCaretLineVisible();
+    return;
+  }
   const start = editor.selectionStart;
   const end = editor.selectionEnd;
   const value = editor.value;
@@ -3375,8 +3383,8 @@ function initMathKeyboardBar() {
     `<button type="button" class="kb-seg" data-kb="numeric">123</button>` +
     `<button type="button" class="kb-seg" data-kb="text">ABC</button>` +
     `</div>` +
-    `<button type="button" class="kb-key kb-key-space" data-ins=" ">` +
-    `<span class="kb-space-word">space</span><span class="kb-space-sym">&#x2423;</span>` +
+    `<button type="button" class="kb-key kb-key-space" data-ins=" " aria-label="Space">` +
+    `<span class="kb-space-word">space</span><span class="kb-space-sym" aria-hidden="true"></span>` +
     `</button>` +
     `</div>` +
     `<div class="kb-keys">` +
@@ -3394,6 +3402,13 @@ function initMathKeyboardBar() {
     const key = t.closest<HTMLElement>('.kb-key');
     if (key?.dataset.ins) insertSnippetAtCaret(key.dataset.ins);
   });
+  // Show the bar the moment the editor is focused — waiting for the native
+  // keyboardWillShow event (plus the webview resize) made it appear a beat
+  // late. The native events in native.ts still cover the cases focus can't
+  // see: the keyboard's dismiss button (focus kept, bar must hide) and
+  // re-tapping the already-focused editor to reopen it.
+  editor.addEventListener('focus', () => document.documentElement.classList.add('kb-open'));
+  editor.addEventListener('blur', () => document.documentElement.classList.remove('kb-open'));
   setKeyboardMode(kbMode);   // default: numeric — applies inputmode pre-focus
 }
 

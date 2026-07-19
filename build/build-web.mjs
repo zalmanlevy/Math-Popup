@@ -202,16 +202,28 @@ body:has(> .web-back) header { padding-left: 52px; }
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  padding: 2px 0;
+  gap: 3px;
+  padding: 3px 0 5px;
 }
 .kb-space-word {
-  font-size: 8px;
+  font-size: 9px;
   line-height: 1;
   font-family: var(--font-ui);
-  color: var(--text-faint);
+  color: var(--text-soft);
   letter-spacing: 0.05em;
 }
-.kb-space-sym { font-size: 14px; line-height: 1.1; }
+/* Drawn open-box space glyph (⎵) — the Unicode character renders miniature,
+   so draw it: full-size, as wide as the key allows. */
+.kb-space-sym {
+  display: block;
+  width: 62%;
+  min-width: 24px;
+  max-width: 46px;
+  height: 9px;
+  border: 2px solid var(--text);
+  border-top: 0;
+  border-radius: 0 0 4px 4px;
+}
 /* Narrow (iPhone portrait, skinny iPad windows): two fixed rows of six keys —
    every key visible and in a stable position, no scrolling. The left cluster
    stacks: 123/ABC on the first row, an equally wide space key on the second. */
