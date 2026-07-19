@@ -71,6 +71,14 @@ export function initNativeShell(onHidden: () => void): void {
     .observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] });
   window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', syncNativeChrome);
   CapApp.addListener('appStateChange', ({ isActive }) => { if (!isActive) onHidden(); }).catch(() => {});
+  // .kb-open marks the ON-SCREEN keyboard being up (native events — a hardware
+  // keyboard never fires these). The renderer's math key bar shows only then.
+  Keyboard.addListener('keyboardWillShow', () => {
+    document.documentElement.classList.add('kb-open');
+  }).catch(() => {});
+  Keyboard.addListener('keyboardWillHide', () => {
+    document.documentElement.classList.remove('kb-open');
+  }).catch(() => {});
   // iPadOS windowed mode: .cap-windowed drives the clearance for the window's
   // traffic-light controls (title bar) and rounded corners / resize grip
   // (footer). Pull on load — each page is a fresh document — then live-update.

@@ -108,15 +108,32 @@ body:has(> .web-back) header { padding-left: 52px; }
   height: calc(24px + env(safe-area-inset-bottom));
 }
 
-/* ---- iPadOS windowed mode (resizable windows / Stage Manager) ---- */
-/* .cap-windowed is toggled by the native WindowState plugin. The window's
-   traffic-light controls sit in the top-leading corner; iPadOS is supposed to
-   report them through the top safe area but versions with the known overlay
-   bug report 0, so a floor keeps the title bar clear either way. */
-:root.cap-native.cap-windowed .title-bar {
-  height: calc(34px + max(env(safe-area-inset-top), 42px));
-  padding-top: max(env(safe-area-inset-top), 42px);
+/* iPhone only in practice: WKWebView "text autosizing" inflates font sizes on
+   phone-width screens as if this were an unoptimized desktop page, pushing the
+   title bar's right-side buttons off screen. Render at designed sizes. */
+:root.cap-native {
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
 }
+
+/* ---- iPadOS windowed mode (resizable windows / Stage Manager) ---- */
+/* .cap-windowed is toggled by the native WindowState plugin. Per Apple's
+   iPadOS 26 guidance, toolbar content shares the top row with the
+   traffic-light window controls and shifts right past them (the controls
+   occupy the top-leading ~64px; safe-area reporting for them is unreliable,
+   so the clearance is a constant). The forced height/padding-top also
+   overrides the fullscreen status-bar inset rule — there is no status bar
+   inside a window. */
+:root.cap-native.cap-windowed .title-bar {
+  height: 38px;
+  padding-top: 4px;
+  padding-left: max(env(safe-area-inset-left), 72px);
+  padding-right: 14px;  /* keep ⚙ off the rounded top-right corner */
+}
+/* Settings/help pages: their fixed Back control lives exactly where the
+   window controls are — shift it (and the heading) right of them. */
+:root.cap-native.cap-windowed .web-back { left: 76px; }
+:root.cap-native.cap-windowed body:has(> .web-back) header { padding-left: 122px; }
 /* Rounded window corners clip flush content and the resize grip overlays the
    bottom-right — give the footer breathing room on all three sides. */
 :root.cap-native.cap-windowed .status-bar {
@@ -125,11 +142,65 @@ body:has(> .web-back) header { padding-left: 52px; }
   padding-left: 16px;
   padding-right: 34px;
 }
+
+/* ---- Native on-screen-keyboard bar (math keys + 123/ABC toggle) ---- */
+/* Built by the popup renderer only inside the native app; shown only while
+   the on-screen keyboard is up (.kb-open tracks the native keyboard events,
+   so a hardware keyboard never shows it). The webview resizes with the
+   keyboard, so this bottom bar sits directly on top of it. */
+.kb-bar { display: none; }
+:root.cap-native.kb-open .kb-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  background: var(--bg-elev);
+  border-top: 1px solid var(--border);
+  overflow-x: auto;
+}
+.kb-bar button { touch-action: manipulation; -webkit-tap-highlight-color: transparent; }
+.kb-toggle {
+  display: inline-flex;
+  flex: 0 0 auto;
+  background: var(--bg-soft);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 2px;
+}
+.kb-seg {
+  border: 0;
+  background: transparent;
+  padding: 5px 10px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-soft);
+  border-radius: 6px;
+}
+.kb-seg.active {
+  background: var(--bg-elev);
+  color: var(--text);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.18);
+}
+.kb-keys { display: flex; gap: 5px; flex: 1; }
+.kb-key {
+  flex: 1 0 30px;
+  min-width: 30px;
+  height: 34px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--bg-elev);
+  color: var(--text);
+  font-size: 15px;
+  font-family: var(--font-mono);
+}
+.kb-key:active { background: var(--bg-soft); }
 `;
 await writeFile(join(out, 'web.css'), WEB_CSS, 'utf8');
 
 // ---- 4. generate the three HTML pages from the desktop HTML (string transform) ----
-const PWA_HEAD = `  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+// maximum-scale=1 disables iOS's automatic page-zoom when focusing a text
+// field with a sub-16px font (the editor is 14px) — the app has its own zoom.
+const PWA_HEAD = `  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover" />
   <link rel="manifest" href="/manifest.webmanifest" />
   <meta name="theme-color" media="(prefers-color-scheme: light)" content="#fafafa" />
   <meta name="theme-color" media="(prefers-color-scheme: dark)" content="#0f1115" />

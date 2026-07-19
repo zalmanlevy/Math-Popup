@@ -450,6 +450,9 @@ async function init() {
   // Restore the tab bar's expanded/collapsed state from last session.
   if (settings.tabBarOpen) showTabBar();
   syncObsidianWatchers();
+  // Native iOS: numeric-first keyboard + the math key bar. Before the initial
+  // focus so the first keyboard that comes up is already the numeric one.
+  if (IS_CAP_NATIVE) initMathKeyboardBar();
   render();
   editor.focus();
   (window as unknown as { mathPopupWebReady?: () => void }).mathPopupWebReady?.();
@@ -3301,6 +3304,86 @@ function scheduleResizeRelayout() {
       layoutTabs();
     }, 200);
   });
+}
+
+// ============================================================
+// Native iOS on-screen-keyboard bar
+// ------------------------------------------------------------
+// Only inside the Capacitor app (the shim marks <html> with .cap-native before
+// this bundle runs; Electron and the plain web build never get the class, so
+// none of this exists there). The editor defaults to the numeric keyboard —
+// this is a math notepad — and a bar pinned above the on-screen keyboard
+// offers a 123/ABC toggle plus one-tap math keys, including the iPhone
+// operators its bare number pad lacks and the k/m suffixes the evaluator
+// expands. Visibility is CSS-driven by .kb-open (native keyboard events), so
+// a hardware keyboard never shows the bar.
+// ============================================================
+const IS_CAP_NATIVE = document.documentElement.classList.contains('cap-native');
+type KbMode = 'numeric' | 'text';
+let kbMode: KbMode = 'numeric';
+let kbBar: HTMLDivElement | null = null;
+
+function insertSnippetAtCaret(text: string) {
+  if (document.activeElement !== editor) editor.focus();
+  const start = editor.selectionStart;
+  const end = editor.selectionEnd;
+  const value = editor.value;
+  captureForUndo();
+  editor.value = value.slice(0, start) + text + value.slice(end);
+  editor.selectionStart = editor.selectionEnd = start + text.length;
+  previousText = editor.value;
+  scheduleSave();
+  render();
+  ensureCaretLineVisible();
+}
+
+function setKeyboardMode(mode: KbMode) {
+  kbMode = mode;
+  // iOS picks the keyboard from inputmode at focus time only, so switching
+  // while typing needs a quick blur/refocus (selection preserved).
+  ed.setAttribute('inputmode', mode === 'numeric' ? 'decimal' : 'text');
+  kbBar?.querySelectorAll<HTMLElement>('.kb-seg').forEach(b =>
+    b.classList.toggle('active', b.dataset.kb === mode));
+  if (document.activeElement === editor) {
+    const s = editor.selectionStart;
+    const e = editor.selectionEnd;
+    ed.blur();
+    requestAnimationFrame(() => {
+      editor.focus();
+      editor.setSelectionRange(s, e);
+    });
+  }
+}
+
+function initMathKeyboardBar() {
+  const KEYS: Array<[label: string, insert: string]> = [
+    ['+', '+'], ['−', '-'], ['×', '*'], ['÷', '/'], ['/', '/'],
+    ['(', '('], [')', ')'], ['%', '%'], ['=', '='],
+    ['k', 'k'], ['m', 'm'],
+  ];
+  kbBar = document.createElement('div');
+  kbBar.className = 'kb-bar';
+  kbBar.innerHTML =
+    `<div class="kb-toggle" role="group" aria-label="Keyboard type">` +
+    `<button type="button" class="kb-seg" data-kb="numeric">123</button>` +
+    `<button type="button" class="kb-seg" data-kb="text">ABC</button>` +
+    `</div>` +
+    `<div class="kb-keys">` +
+    KEYS.map(([label, ins]) =>
+      `<button type="button" class="kb-key" data-ins="${ins}">${label}</button>`).join('') +
+    `</div>`;
+  document.body.appendChild(kbBar);
+  // Same trick as the line gutter: swallow mousedown so tapping a key never
+  // steals focus (and never dismisses the keyboard); click still fires.
+  kbBar.addEventListener('mousedown', (e) => e.preventDefault());
+  kbBar.addEventListener('click', (e) => {
+    const t = e.target as HTMLElement;
+    const seg = t.closest<HTMLElement>('.kb-seg');
+    if (seg?.dataset.kb) { setKeyboardMode(seg.dataset.kb as KbMode); return; }
+    const key = t.closest<HTMLElement>('.kb-key');
+    if (key?.dataset.ins) insertSnippetAtCaret(key.dataset.ins);
+  });
+  setKeyboardMode(kbMode);   // default: numeric — applies inputmode pre-focus
 }
 
 // Build the inline result overlay HTML: a green "= answer" pinned to the right
