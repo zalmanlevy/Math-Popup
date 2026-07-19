@@ -3393,6 +3393,28 @@ function scheduleResizeRelayout() {
 type KbMode = 'numeric' | 'text';
 let kbMode: KbMode = 'numeric';
 let kbBar: HTMLDivElement | null = null;
+// True while a 123/ABC switch is transferring focus through the hidden helper
+// field — the editor's blur handler must NOT hide the bar for that hop.
+let kbSwitching = false;
+// Hidden 1px input used to keep the iOS keyboard PRESENTED while the editor
+// re-focuses with new input traits. Without it the switch is blur → keyboard
+// dismiss (webview grows) → refocus → keyboard present (webview shrinks): two
+// opposing animated resizes that leave the key bar wandering for ~a second.
+// Holding focus here for one frame makes iOS morph the keyboard in place —
+// one movement, and the bar lands straight at its final height.
+let kbFocusKeeper: HTMLInputElement | null = null;
+
+function ensureKbFocusKeeper(): HTMLInputElement {
+  if (kbFocusKeeper) return kbFocusKeeper;
+  const el = document.createElement('input');
+  el.type = 'text';
+  el.className = 'kb-focus-keeper';
+  el.setAttribute('aria-hidden', 'true');
+  el.tabIndex = -1;
+  document.body.appendChild(el);
+  kbFocusKeeper = el;
+  return el;
+}
 
 function insertSnippetAtCaret(text: string) {
   if (document.activeElement !== editor) editor.focus();
@@ -3447,10 +3469,24 @@ function setKeyboardMode(mode: KbMode) {
   if (document.activeElement === editor) {
     const s = editor.selectionStart;
     const e = editor.selectionEnd;
-    ed.blur();
+    // Hop focus through the hidden helper (already carrying the TARGET traits,
+    // so the morph starts immediately) instead of a bare blur: iOS keeps the
+    // keyboard presented across a same-tick editable→editable focus move, so
+    // the webview resizes ONCE to the new keyboard height instead of bouncing
+    // through full height. Falls back to the plain blur if focus is refused.
+    kbSwitching = true;
+    const keeper = ensureKbFocusKeeper();
+    keeper.setAttribute('inputmode', mode === 'numeric' ? 'decimal' : 'text');
+    keeper.setAttribute('autocorrect', mode === 'text' ? 'on' : 'off');
+    keeper.setAttribute('autocapitalize', mode === 'text' ? 'sentences' : 'off');
+    try { keeper.focus({ preventScroll: true }); } catch { /* fall through */ }
+    if (document.activeElement !== keeper) ed.blur();
+    window.setTimeout(() => { kbSwitching = false; }, 300);  // safety: never wedge the blur guard
     requestAnimationFrame(() => {
-      editor.focus();
+      try { editor.focus({ preventScroll: true }); } catch { editor.focus(); }
       editor.setSelectionRange(s, e);
+      kbSwitching = false;
+      ensureCaretLineVisible();
     });
   }
 }
@@ -3526,7 +3562,11 @@ function initMathKeyboardBar() {
   // see: the keyboard's dismiss button (focus kept, bar must hide) and
   // re-tapping the already-focused editor to reopen it.
   editor.addEventListener('focus', () => document.documentElement.classList.add('kb-open'));
-  editor.addEventListener('blur', () => document.documentElement.classList.remove('kb-open'));
+  // Skip the hide during a 123/ABC switch: focus hops through the hidden
+  // helper for a frame and the bar must not blink out and re-layout.
+  editor.addEventListener('blur', () => {
+    if (!kbSwitching) document.documentElement.classList.remove('kb-open');
+  });
   setKeyboardMode(kbMode);   // default: numeric — applies inputmode pre-focus
 }
 

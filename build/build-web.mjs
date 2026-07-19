@@ -335,6 +335,25 @@ body:has(> .web-back) header { padding-left: 52px; }
 .kb-key.kb-b { font-family: var(--font-ui); font-weight: 800; }
 .kb-key.kb-i { font-family: var(--font-ui); font-style: italic; }
 .kb-key.kb-u { font-family: var(--font-ui); text-decoration: underline; text-underline-offset: 2px; }
+/* Invisible 1px input that briefly holds focus during a 123/ABC switch so the
+   iOS keyboard morphs in place instead of dismissing and re-presenting.
+   opacity:0 (not display:none / visibility:hidden) — iOS refuses to focus
+   fully hidden fields. */
+.kb-focus-keeper {
+  position: fixed;
+  bottom: 0;
+  left: 0;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  border: 0;
+  margin: 0;
+  opacity: 0;
+  background: transparent;
+  color: transparent;
+  caret-color: transparent;
+  pointer-events: none;
+}
 .kb-left { display: flex; align-items: center; gap: 8px; flex: 0 0 auto; }
 .kb-key-space {
   flex: 0 0 56px;
